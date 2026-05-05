@@ -16,6 +16,8 @@ from texocad_agents.storage import (
     upload_source_blob,
 )
 
+EXPORT_EXTENSION = ".step"
+
 
 @tool(parse_docstring=True)
 def build_design(
@@ -42,7 +44,7 @@ def build_design(
     metadata = runtime.config.get("metadata", {})
     auth_user = configurable.get("langgraph_auth_user") or {}
 
-    owner_id = auth_user.get("identity") or metadata.get("owner")
+    owner_id = auth_user.get("identity")
     if not owner_id:
         return "Refused: cannot create design artifacts without an authenticated owner."
 
@@ -93,6 +95,16 @@ def build_design(
                 "revision_created: false\n"
                 f"exit_code: {result.exit_code}\n"
                 f"output:\n{result.output.strip()}"
+            )
+
+        export_error = _validate_step_exports(result.model_paths)
+        if export_error:
+            return (
+                "Sandbox execution failed.\n"
+                f"design_id: {design_id}\n"
+                "revision_created: false\n"
+                "exit_code: 1\n"
+                f"output:\n{export_error}"
             )
 
         tables = get_design_tables()
@@ -156,6 +168,17 @@ def _read_runtime_file(file_path: str, runtime: ToolRuntime) -> str | None:
     for candidate in candidates:
         if candidate in files:
             return _file_text(files[candidate])
+    return None
+
+
+def _validate_step_exports(model_paths: tuple[Path, ...]) -> str | None:
+    if len(model_paths) != 1:
+        return f"Expected exactly one STEP export, found {len(model_paths)}."
+
+    model_path = model_paths[0]
+    if model_path.suffix.lower() != EXPORT_EXTENSION:
+        return f"Expected a .step export, found {model_path.name!r}."
+
     return None
 
 

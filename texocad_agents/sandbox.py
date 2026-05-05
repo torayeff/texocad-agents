@@ -12,7 +12,10 @@ from daytona import (
     Resources,
 )
 
-MODEL_EXTENSIONS = (".step", ".stp", ".glb", ".gltf", ".stl")
+MODEL_EXTENSION = ".step"
+MAX_PROCESS_OUTPUT_CHARS = 20_000
+MAX_MODEL_FILES = 1
+MAX_MODEL_BYTES = 100 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -114,30 +117,54 @@ def run_code(
             env={"TEXOCAD_OUTPUT_DIR": remote_output_dir},
             timeout=config.exec_timeout,
         )
-        output = response.result or ""
+        raw_output = response.result or ""
+        output = raw_output
+        if len(raw_output) > MAX_PROCESS_OUTPUT_CHARS:
+            output = (
+                raw_output[:MAX_PROCESS_OUTPUT_CHARS]
+                + "\n...[sandbox output truncated]..."
+            )
         if response.exit_code != 0:
             return SandboxRunResult(exit_code=response.exit_code, output=output)
 
-        remote_model_paths = sorted(
-            posixpath.join(remote_output_dir, item.name)
+        remote_output_files = sorted(
+            (
+                posixpath.join(remote_output_dir, item.name),
+                int(getattr(item, "size", 0) or 0),
+            )
             for item in sandbox.fs.list_files(remote_output_dir)
             if not item.is_dir
-            and posixpath.splitext(item.name)[1].lower() in MODEL_EXTENSIONS
         )
-        if not remote_model_paths:
-            return SandboxRunResult(exit_code=0, output=output)
+        output_validation_error = _validate_output_files(remote_output_files)
+        if output_validation_error:
+            return output_validation_error
+
+        remote_model_files = [
+            file_info
+            for file_info in remote_output_files
+            if posixpath.splitext(file_info[0])[1].lower() == MODEL_EXTENSION
+        ]
+        remote_validation_error = _validate_remote_model_files(remote_model_files)
+        if remote_validation_error:
+            return remote_validation_error
 
         output_dir.mkdir(parents=True, exist_ok=True)
-        local_model_paths = []
-        for remote_model_path in remote_model_paths:
-            local_model_path = output_dir / posixpath.basename(remote_model_path)
-            local_model_path.write_bytes(sandbox.fs.download_file(remote_model_path))
-            local_model_paths.append(local_model_path)
+        remote_model_path, _ = remote_model_files[0]
+        model_bytes = sandbox.fs.download_file(remote_model_path)
+        download_validation_error = _validate_downloaded_model_file(
+            remote_model_path,
+            len(model_bytes),
+        )
+        if download_validation_error:
+            return download_validation_error
+
+        local_model_path = output_dir / posixpath.basename(remote_model_path)
+        local_model_path.write_bytes(model_bytes)
 
         return SandboxRunResult(
             exit_code=0,
             output=output,
-            model_paths=tuple(local_model_paths),
+            model_paths=(local_model_path,),
         )
     finally:
         if sandbox is not None:
@@ -145,6 +172,69 @@ def run_code(
                 sandbox.delete(timeout=60)
             except Exception:
                 pass
+
+
+def _validate_output_files(
+    remote_output_files: list[tuple[str, int]],
+) -> SandboxRunResult | None:
+    unsupported_files = [
+        posixpath.basename(remote_path)
+        for remote_path, _ in remote_output_files
+        if posixpath.splitext(remote_path)[1].lower() != MODEL_EXTENSION
+    ]
+    if not unsupported_files:
+        return None
+
+    return SandboxRunResult(
+        exit_code=1,
+        output=(
+            "Sandbox output must contain only .step files; found unsupported "
+            f"file(s): {', '.join(unsupported_files)}."
+        ),
+    )
+
+
+def _validate_remote_model_files(
+    remote_model_files: list[tuple[str, int]],
+) -> SandboxRunResult | None:
+    if len(remote_model_files) != MAX_MODEL_FILES:
+        return SandboxRunResult(
+            exit_code=1,
+            output=(
+                f"Sandbox must produce exactly {MAX_MODEL_FILES} .step file; "
+                f"found {len(remote_model_files)}."
+            ),
+        )
+
+    for remote_model_path, size in remote_model_files:
+        if size > MAX_MODEL_BYTES:
+            return SandboxRunResult(
+                exit_code=1,
+                output=(
+                    f"Sandbox produced oversized model file "
+                    f"{posixpath.basename(remote_model_path)!r}: {size} bytes; "
+                    f"limit is {MAX_MODEL_BYTES} bytes."
+                ),
+            )
+
+    return None
+
+
+def _validate_downloaded_model_file(
+    remote_model_path: str,
+    model_size: int,
+) -> SandboxRunResult | None:
+    if model_size > MAX_MODEL_BYTES:
+        return SandboxRunResult(
+            exit_code=1,
+            output=(
+                f"Sandbox produced oversized model file "
+                f"{posixpath.basename(remote_model_path)!r}: {model_size} bytes; "
+                f"limit is {MAX_MODEL_BYTES} bytes."
+            ),
+        )
+
+    return None
 
 
 def _snapshot_state(snapshot: object) -> str:

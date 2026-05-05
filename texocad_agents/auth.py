@@ -4,7 +4,6 @@ from typing import Any, NoReturn
 
 import jwt
 from langgraph_sdk import Auth
-from langgraph_sdk.auth import is_studio_user
 
 from texocad_agents.models import DEFAULT_MODEL, MODELS
 
@@ -97,8 +96,6 @@ async def reject_unhandled_requests(
     ctx: Auth.types.AuthContext,
     value: dict[str, Any],
 ) -> Auth.types.FilterType:
-    if is_studio_user(ctx.user):
-        return {}
     _forbidden("Unsupported resource or action")
 
 
@@ -139,8 +136,6 @@ async def authorize_thread_run_create(
     ctx: Auth.types.AuthContext,
     value: Auth.types.on.threads.create_run.value,
 ) -> Auth.types.FilterType:
-    if is_studio_user(ctx.user):
-        return {}
     allowed = set(ctx.user.get(METADATA_KEY, {}).get(METADATA_ALLOWED_MODELS, []))
     metadata = value.setdefault(METADATA_KEY, {})
     requested = metadata.get(METADATA_MODEL, DEFAULT_MODEL)
@@ -203,8 +198,6 @@ def allowed_models(payload: dict[str, object]) -> set[str]:
 
 
 def _owner_filter(ctx: Auth.types.AuthContext) -> Auth.types.FilterType:
-    if is_studio_user(ctx.user):
-        return {}
     return {METADATA_OWNER: ctx.user.identity}
 
 
@@ -212,8 +205,6 @@ def _stamp_owner(
     ctx: Auth.types.AuthContext,
     value: dict[str, Any],
 ) -> Auth.types.FilterType:
-    if is_studio_user(ctx.user):
-        return {}
     owner_filter: Auth.types.FilterType = {METADATA_OWNER: ctx.user.identity}
     metadata = value.setdefault(METADATA_KEY, {})
     metadata.update(owner_filter)

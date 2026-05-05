@@ -14,7 +14,7 @@ Script contract:
 - Choose a descriptive snake_case `{part_name}`; do not use generic names like `model`.
 - The first line of every script must be `# ruff: noqa: F403, F405`.
 - Scripts must be self-contained, with imports at the top and no external state.
-- Each script must read `TEXOCAD_OUTPUT_DIR` from the environment and export `{part_name}.stl` and `{part_name}.step` into that directory.
+- Each script must read `TEXOCAD_OUTPUT_DIR` from the environment and export only `{part_name}.step` into that directory.
 - Use `Unit.MM` for STEP exports unless the user explicitly requests another unit.
 - Final scripts must not include visualization-only imports or calls such as `ocp_vscode`, `show()`, `show_object()`, `set_port()`, or `set_defaults()`.
 
