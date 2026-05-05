@@ -1,9 +1,12 @@
 import tempfile
+from dataclasses import asdict
 from pathlib import Path, PurePosixPath
 
 from daytona import Daytona
+from langchain_core.messages import ToolMessage
 from langchain_core.tools import tool
 from langgraph.prebuilt.tool_node import ToolRuntime
+from langgraph.types import Command
 
 from texocad_agents.sandbox import SANDBOX_CONFIG, ensure_snapshot, run_code
 from texocad_agents.storage import (
@@ -23,7 +26,7 @@ EXPORT_EXTENSION = ".step"
 def build_design(
     file_path: str,
     runtime: ToolRuntime,
-) -> str:
+) -> Command | str:
     """Build CAD code and store a design revision with exported model files.
 
     Use this after writing or editing a CAD Python file in the agent filesystem.
@@ -150,12 +153,32 @@ def build_design(
         source_blob,
         exports,
     )
-    return _tool_summary(
+    summary = _tool_summary(
         design_id=design_id,
         design_revision=design_revision,
         source_blob=source_blob,
         exports=exports,
         sandbox_output=result.output,
+    )
+    return Command(
+        update={
+            "messages": [
+                ToolMessage(
+                    content=summary,
+                    tool_call_id=runtime.tool_call_id,
+                    additional_kwargs={
+                        "texocad_artifact": _revision_artifact_payload(
+                            design_id=design_id,
+                            design_revision=design_revision,
+                            source_blob=source_blob,
+                            exports=exports,
+                            thread_id=thread_id,
+                            run_id=run_id,
+                        )
+                    },
+                )
+            ]
+        }
     )
 
 
@@ -221,3 +244,35 @@ def _tool_summary(
         lines.append("sandbox_output:")
         lines.append(sandbox_output.strip()[:4000])
     return "\n".join(lines)
+
+
+def _revision_artifact_payload(
+    *,
+    design_id: str,
+    design_revision: dict,
+    source_blob,
+    exports: list,
+    thread_id: str,
+    run_id: str | None,
+) -> dict:
+    payload = {
+        "type": "texocad.design_revision",
+        "designId": design_id,
+        "revisionNumber": int(design_revision["revision_number"]),
+        "source": _stored_blob_payload(source_blob),
+        "exports": [_stored_blob_payload(export) for export in exports],
+        "createdByThreadId": thread_id,
+    }
+    if run_id:
+        payload["createdByRunId"] = str(run_id)
+    return payload
+
+
+def _stored_blob_payload(blob) -> dict:
+    data = asdict(blob)
+    return {
+        "filename": data["filename"],
+        "blobName": data["blob_name"],
+        "contentType": data["content_type"],
+        "checksum": data["checksum"],
+    }
