@@ -39,39 +39,6 @@ class SandboxRunResult:
     model_paths: tuple[Path, ...] = ()
 
 
-def _snapshot_state(snapshot: object) -> str:
-    raw_state = getattr(snapshot, "state", "")
-    state_value = getattr(raw_state, "value", raw_state)
-    return str(state_value).strip().lower().split(".")[-1].replace("_", " ")
-
-
-def _wait_for_active_snapshot(
-    daytona: Daytona,
-    snapshot: object,
-    config: SandboxConfig,
-) -> None:
-    deadline = (
-        None if config.create_timeout == 0 else time.monotonic() + config.create_timeout
-    )
-
-    while True:
-        state = _snapshot_state(snapshot)
-        if state == "active":
-            return
-        if state in {"error", "build failed", "removing"}:
-            raise RuntimeError(
-                f"Snapshot {config.snapshot_name!r} is not usable; current state: {state}"
-            )
-        if deadline is not None and time.monotonic() >= deadline:
-            raise RuntimeError(
-                f"Snapshot {config.snapshot_name!r} did not become active before timeout; "
-                f"current state: {state or 'unknown'}"
-            )
-
-        time.sleep(config.snapshot_poll_interval)
-        snapshot = daytona.snapshot.get(config.snapshot_name)
-
-
 def ensure_snapshot(daytona: Daytona, config: SandboxConfig = SANDBOX_CONFIG) -> None:
     try:
         snapshot = daytona.snapshot.get(config.snapshot_name)
@@ -170,3 +137,36 @@ def run_code(
                 sandbox.delete(timeout=60)
             except Exception:
                 pass
+
+
+def _snapshot_state(snapshot: object) -> str:
+    raw_state = getattr(snapshot, "state", "")
+    state_value = getattr(raw_state, "value", raw_state)
+    return str(state_value).strip().lower().split(".")[-1].replace("_", " ")
+
+
+def _wait_for_active_snapshot(
+    daytona: Daytona,
+    snapshot: object,
+    config: SandboxConfig,
+) -> None:
+    deadline = (
+        None if config.create_timeout == 0 else time.monotonic() + config.create_timeout
+    )
+
+    while True:
+        state = _snapshot_state(snapshot)
+        if state == "active":
+            return
+        if state in {"error", "build failed", "removing"}:
+            raise RuntimeError(
+                f"Snapshot {config.snapshot_name!r} is not usable; current state: {state}"
+            )
+        if deadline is not None and time.monotonic() >= deadline:
+            raise RuntimeError(
+                f"Snapshot {config.snapshot_name!r} did not become active before timeout; "
+                f"current state: {state or 'unknown'}"
+            )
+
+        time.sleep(config.snapshot_poll_interval)
+        snapshot = daytona.snapshot.get(config.snapshot_name)

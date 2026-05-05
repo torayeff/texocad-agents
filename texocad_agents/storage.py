@@ -41,19 +41,6 @@ class StoredArtifact:
     checksum: str
 
 
-def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def new_id(prefix: str) -> str:
-    return f"{prefix}_{uuid4().hex}"
-
-
-def safe_key(value: str) -> str:
-    value = value.strip("/")
-    return "".join("_" if char in "/\\#?\n\r\t" else char for char in value)
-
-
 def get_storage_container():
     return BlobServiceClient.from_connection_string(
         os.environ["AZURE_STORAGE_CONNECTION_STRING"]
@@ -73,67 +60,6 @@ def get_design_tables() -> DesignTables:
             ARTIFACT_REVISIONS_TABLE_NAME
         ),
     )
-
-
-def blob_path_from_url(value: str, container_name: str | None = None) -> str:
-    parsed = urlparse(value)
-    if not parsed.scheme:
-        return value.lstrip("/")
-
-    container = container_name or os.getenv("AZURE_STORAGE_CONTAINER_NAME", "")
-    parts = [unquote(part) for part in parsed.path.lstrip("/").split("/") if part]
-    if container and parts[:1] == [container]:
-        parts = parts[1:]
-    return "/".join(parts)
-
-
-def odata_string(value: str) -> str:
-    escaped = value.replace("'", "''")
-    return f"'{escaped}'"
-
-
-def model_blob_extension(model_path: Path) -> str:
-    suffix = model_path.suffix.lower()
-    return ".step" if suffix == ".stp" else suffix
-
-
-def source_blob_name(
-    owner_id: str,
-    design_id: str,
-    design_revision_id: str,
-    artifact_revision_id: str,
-) -> str:
-    return (
-        f"designs/{safe_key(owner_id)}/{safe_key(design_id)}"
-        f"/revisions/{safe_key(design_revision_id)}"
-        f"/source/{safe_key(artifact_revision_id)}.py"
-    )
-
-
-def export_blob_name(
-    owner_id: str,
-    design_id: str,
-    design_revision_id: str,
-    artifact_revision_id: str,
-    extension: str,
-) -> str:
-    return (
-        f"designs/{safe_key(owner_id)}/{safe_key(design_id)}"
-        f"/revisions/{safe_key(design_revision_id)}"
-        f"/exports/{safe_key(artifact_revision_id)}{extension}"
-    )
-
-
-def sha256_bytes(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
-
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as file:
-        for chunk in iter(lambda: file.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def get_design(designs_table, owner_id: str, design_id: str):
@@ -191,17 +117,6 @@ def list_design_revisions(design_revisions_table, owner_id: str, design_id: str)
         )
     )
     return sorted(revisions, key=lambda revision: revision["revision_number"])
-
-
-def next_design_revision_number(
-    design_revisions_table,
-    owner_id: str,
-    design_id: str,
-) -> int:
-    revisions = list_design_revisions(design_revisions_table, owner_id, design_id)
-    if not revisions:
-        return 1
-    return int(revisions[-1]["revision_number"]) + 1
 
 
 def create_design_revision(
@@ -339,3 +254,88 @@ def upload_export_artifact(
         content_type=content_type,
         checksum=sha256_file(model_path),
     )
+
+
+def blob_path_from_url(value: str, container_name: str | None = None) -> str:
+    parsed = urlparse(value)
+    if not parsed.scheme:
+        return value.lstrip("/")
+
+    container = container_name or os.getenv("AZURE_STORAGE_CONTAINER_NAME", "")
+    parts = [unquote(part) for part in parsed.path.lstrip("/").split("/") if part]
+    if container and parts[:1] == [container]:
+        parts = parts[1:]
+    return "/".join(parts)
+
+
+def new_id(prefix: str) -> str:
+    return f"{prefix}_{uuid4().hex}"
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def safe_key(value: str) -> str:
+    value = value.strip("/")
+    return "".join("_" if char in "/\\#?\n\r\t" else char for char in value)
+
+
+def odata_string(value: str) -> str:
+    escaped = value.replace("'", "''")
+    return f"'{escaped}'"
+
+
+def next_design_revision_number(
+    design_revisions_table,
+    owner_id: str,
+    design_id: str,
+) -> int:
+    revisions = list_design_revisions(design_revisions_table, owner_id, design_id)
+    if not revisions:
+        return 1
+    return int(revisions[-1]["revision_number"]) + 1
+
+
+def model_blob_extension(model_path: Path) -> str:
+    suffix = model_path.suffix.lower()
+    return ".step" if suffix == ".stp" else suffix
+
+
+def source_blob_name(
+    owner_id: str,
+    design_id: str,
+    design_revision_id: str,
+    artifact_revision_id: str,
+) -> str:
+    return (
+        f"designs/{safe_key(owner_id)}/{safe_key(design_id)}"
+        f"/revisions/{safe_key(design_revision_id)}"
+        f"/source/{safe_key(artifact_revision_id)}.py"
+    )
+
+
+def export_blob_name(
+    owner_id: str,
+    design_id: str,
+    design_revision_id: str,
+    artifact_revision_id: str,
+    extension: str,
+) -> str:
+    return (
+        f"designs/{safe_key(owner_id)}/{safe_key(design_id)}"
+        f"/revisions/{safe_key(design_revision_id)}"
+        f"/exports/{safe_key(artifact_revision_id)}{extension}"
+    )
+
+
+def sha256_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as file:
+        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()

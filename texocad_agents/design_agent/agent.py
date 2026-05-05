@@ -7,9 +7,13 @@ from langchain_anthropic import ChatAnthropic
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph.state import CompiledStateGraph
 
-from design_agent.conf import DEFAULT_MODEL, MODELS
-from google_auth import with_google_vertex_credentials
-from tools import build_design, read_attachment
+from texocad_agents.models import (
+    DEFAULT_MODEL,
+    MODELS,
+    with_google_vertex_credentials,
+)
+from texocad_agents.tools.build_design import build_design
+from texocad_agents.tools.read_attachment import read_attachment
 
 
 async def create_design_agent(config: RunnableConfig) -> CompiledStateGraph:

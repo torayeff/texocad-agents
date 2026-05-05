@@ -6,9 +6,7 @@ import jwt
 from langgraph_sdk import Auth
 from langgraph_sdk.auth import is_studio_user
 
-from design_agent.conf import DEFAULT_MODEL, MODELS
-
-auth = Auth()
+from texocad_agents.models import DEFAULT_MODEL, MODELS
 
 JWT_CLAIM_AUTHORIZED_PARTY = "azp"
 JWT_CLAIM_SESSION_ID = "sid"
@@ -45,114 +43,28 @@ METADATA_ALLOWED_MODELS = "allowed_models"
 METADATA_MODEL = "model"
 METADATA_OWNER = "owner"
 
+CLERK_JWKS_URL = os.getenv("CLERK_JWKS_URL")
+CLERK_ISSUER = os.getenv("CLERK_ISSUER")
+ALLOWED_TOKEN_AZP = os.getenv("ALLOWED_TOKEN_AZP")
+if not CLERK_JWKS_URL:
+    raise RuntimeError("CLERK_JWKS_URL is not set")
+if not CLERK_ISSUER:
+    raise RuntimeError("CLERK_ISSUER is not set")
+if not ALLOWED_TOKEN_AZP:
+    raise RuntimeError("ALLOWED_TOKEN_AZP is not set")
 
-def _unauthorized(detail: str) -> NoReturn:
-    raise Auth.exceptions.HTTPException(
-        status_code=401,
-        detail=detail,
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-
-
-def _forbidden(detail: str) -> NoReturn:
-    raise Auth.exceptions.HTTPException(status_code=403, detail=detail)
-
-
-def _required_env(name: str) -> str:
-    value = os.getenv(name)
-    if not value:
-        raise RuntimeError(f"{name} is not set")
-    return value
-
-
-def _csv_parts(raw: str) -> list[str]:
-    return [part.strip() for part in raw.split(",") if part.strip()]
-
-
-def _parse_audience(raw: str) -> str | list[str] | None:
-    parts = _csv_parts(raw)
-    if len(parts) == 1:
-        return parts[0]
-    if parts:
-        return parts
-    return None
-
-
-_jwks = jwt.PyJWKClient(_required_env("CLERK_JWKS_URL"), cache_keys=True)
-_issuer = _required_env("CLERK_ISSUER")
-_allowed_azp = set(_csv_parts(_required_env("ALLOWED_TOKEN_AZP")))
+_jwks = jwt.PyJWKClient(CLERK_JWKS_URL, cache_keys=True)
+_allowed_azp = {part.strip() for part in ALLOWED_TOKEN_AZP.split(",") if part.strip()}
 if not _allowed_azp:
     raise RuntimeError("ALLOWED_TOKEN_AZP must contain at least one origin")
-_audience = _parse_audience(os.getenv("CLERK_AUDIENCE", ""))
+_audience_parts = [
+    part.strip() for part in os.getenv("CLERK_AUDIENCE", "").split(",") if part.strip()
+]
+_audience = _audience_parts[0] if len(_audience_parts) == 1 else _audience_parts
+if not _audience:
+    _audience = None
 
-
-def verify_token(token: str) -> tuple[str, dict[str, object]]:
-    signing_key = _jwks.get_signing_key_from_jwt(token)
-    payload = jwt.decode(
-        token,
-        signing_key.key,
-        algorithms=["RS256"],
-        audience=_audience,
-        issuer=_issuer,
-        leeway=JWT_LEEWAY_SECONDS,
-        options={
-            "require": list(REQUIRED_CLAIMS),
-            "verify_aud": _audience is not None,
-        },
-    )
-
-    azp = payload.get(JWT_CLAIM_AUTHORIZED_PARTY)
-    if not isinstance(azp, str) or azp not in _allowed_azp:
-        _unauthorized("Invalid authorized party")
-
-    for claim in (JWT_CLAIM_SESSION_ID, JWT_CLAIM_SUBJECT):
-        if not isinstance(payload.get(claim), str) or not payload[claim]:
-            _unauthorized(f"Token missing {claim} claim")
-
-    if payload.get(JWT_CLAIM_TOKEN_VERSION) != TOKEN_VERSION:
-        _unauthorized("Unsupported token version")
-
-    if payload.get(JWT_CLAIM_SESSION_STATUS) == SESSION_STATUS_PENDING:
-        _unauthorized("Pending sessions are not allowed")
-
-    check_subscription(payload)
-    return payload[JWT_CLAIM_SUBJECT], payload
-
-
-def check_subscription(payload: dict[str, object]) -> None:
-    if any(payload.get(claim) is True for claim in ACCESS_BYPASS_CLAIMS):
-        return
-
-    pla = payload.get(ACCESS_CLAIM_PLANS)
-    if not isinstance(pla, str):
-        _forbidden("Active subscription required")
-    plans = set(_csv_parts(pla))
-    if plans.isdisjoint(ALLOWED_PLAN_SCOPES):
-        _forbidden("Active subscription required")
-
-
-def allowed_models(payload: dict[str, object]) -> set[str]:
-    if payload.get(ACCESS_CLAIM_VIP) is True:
-        return set(MODELS.keys())
-    return {DEFAULT_MODEL}
-
-
-def _owner_filter(ctx: Auth.types.AuthContext) -> Auth.types.FilterType:
-    if is_studio_user(ctx.user):
-        return {}
-    return {METADATA_OWNER: ctx.user.identity}
-
-
-def _stamp_owner(
-    ctx: Auth.types.AuthContext,
-    value: dict[str, Any],
-) -> Auth.types.FilterType:
-    if is_studio_user(ctx.user):
-        return {}
-    owner_filter: Auth.types.FilterType = {METADATA_OWNER: ctx.user.identity}
-    metadata = value.setdefault(METADATA_KEY, {})
-    metadata.update(owner_filter)
-    return owner_filter
+auth = Auth()
 
 
 @auth.authenticate
@@ -239,3 +151,88 @@ async def authorize_thread_run_create(
     metadata[METADATA_MODEL] = requested
     metadata[METADATA_OWNER] = ctx.user.identity
     return {METADATA_OWNER: ctx.user.identity}
+
+
+def verify_token(token: str) -> tuple[str, dict[str, object]]:
+    signing_key = _jwks.get_signing_key_from_jwt(token)
+    payload = jwt.decode(
+        token,
+        signing_key.key,
+        algorithms=["RS256"],
+        audience=_audience,
+        issuer=CLERK_ISSUER,
+        leeway=JWT_LEEWAY_SECONDS,
+        options={
+            "require": list(REQUIRED_CLAIMS),
+            "verify_aud": _audience is not None,
+        },
+    )
+
+    azp = payload.get(JWT_CLAIM_AUTHORIZED_PARTY)
+    if not isinstance(azp, str) or azp not in _allowed_azp:
+        _unauthorized("Invalid authorized party")
+
+    for claim in (JWT_CLAIM_SESSION_ID, JWT_CLAIM_SUBJECT):
+        if not isinstance(payload.get(claim), str) or not payload[claim]:
+            _unauthorized(f"Token missing {claim} claim")
+
+    if payload.get(JWT_CLAIM_TOKEN_VERSION) != TOKEN_VERSION:
+        _unauthorized("Unsupported token version")
+
+    if payload.get(JWT_CLAIM_SESSION_STATUS) == SESSION_STATUS_PENDING:
+        _unauthorized("Pending sessions are not allowed")
+
+    check_subscription(payload)
+    return payload[JWT_CLAIM_SUBJECT], payload
+
+
+def check_subscription(payload: dict[str, object]) -> None:
+    if any(payload.get(claim) is True for claim in ACCESS_BYPASS_CLAIMS):
+        return
+
+    pla = payload.get(ACCESS_CLAIM_PLANS)
+    if not isinstance(pla, str):
+        _forbidden("Active subscription required")
+    plans = set(_csv_parts(pla))
+    if plans.isdisjoint(ALLOWED_PLAN_SCOPES):
+        _forbidden("Active subscription required")
+
+
+def allowed_models(payload: dict[str, object]) -> set[str]:
+    if payload.get(ACCESS_CLAIM_VIP) is True:
+        return set(MODELS.keys())
+    return {DEFAULT_MODEL}
+
+
+def _owner_filter(ctx: Auth.types.AuthContext) -> Auth.types.FilterType:
+    if is_studio_user(ctx.user):
+        return {}
+    return {METADATA_OWNER: ctx.user.identity}
+
+
+def _stamp_owner(
+    ctx: Auth.types.AuthContext,
+    value: dict[str, Any],
+) -> Auth.types.FilterType:
+    if is_studio_user(ctx.user):
+        return {}
+    owner_filter: Auth.types.FilterType = {METADATA_OWNER: ctx.user.identity}
+    metadata = value.setdefault(METADATA_KEY, {})
+    metadata.update(owner_filter)
+    return owner_filter
+
+
+def _unauthorized(detail: str) -> NoReturn:
+    raise Auth.exceptions.HTTPException(
+        status_code=401,
+        detail=detail,
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+def _forbidden(detail: str) -> NoReturn:
+    raise Auth.exceptions.HTTPException(status_code=403, detail=detail)
+
+
+def _csv_parts(raw: str) -> list[str]:
+    return [part.strip() for part in raw.split(",") if part.strip()]
