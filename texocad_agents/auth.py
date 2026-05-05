@@ -31,12 +31,10 @@ ACCESS_CLAIM_PLANS = "pla"
 ACCESS_CLAIM_VIP = "vipAccess"
 ACCESS_BYPASS_CLAIMS = (ACCESS_CLAIM_FREE, ACCESS_CLAIM_VIP)
 EARLY_BIRD_PLAN = "early_bird"
-ALLOWED_PLAN_SCOPES: frozenset[str] = frozenset(
-    (
-        f"u:{EARLY_BIRD_PLAN}",
-        f"o:{EARLY_BIRD_PLAN}",
-    )
-)
+ALLOWED_PLAN_SCOPES: frozenset[str] = frozenset((
+    f"u:{EARLY_BIRD_PLAN}",
+    f"o:{EARLY_BIRD_PLAN}",
+))
 
 METADATA_KEY = "metadata"
 METADATA_ALLOWED_MODELS = "allowed_models"

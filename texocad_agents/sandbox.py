@@ -48,7 +48,8 @@ def ensure_snapshot(daytona: Daytona, config: SandboxConfig = SANDBOX_CONFIG) ->
 
         apt_packages = " ".join(config.apt_packages)
         image = (
-            Image.debian_slim(config.python_version)
+            Image
+            .debian_slim(config.python_version)
             .run_commands(
                 "apt-get update && "
                 f"apt-get install -y --no-install-recommends {apt_packages} && "
