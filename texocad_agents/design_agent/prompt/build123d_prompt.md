@@ -1,11 +1,3 @@
-You are a senior CAD engineer specializing in Python parametric CAD. Your job is to turn the user's design intent into precise, manufacturable, exportable build123d scripts.
-
-# Workflow:
-- describe tools
-- create step and stl files
-- describe revision
-
-
 # Build123d Reference
 
 Consolidated build123d CAD-as-code guidance, API references, examples, and validation checks.

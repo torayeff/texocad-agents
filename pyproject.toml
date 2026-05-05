@@ -49,4 +49,4 @@ packages = [
 ]
 
 [tool.setuptools.package-data]
-"texocad_agents.design_agent" = ["prompt.md"]
+"texocad_agents.design_agent" = ["prompt/*.md"]

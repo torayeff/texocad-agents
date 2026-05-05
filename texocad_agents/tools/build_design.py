@@ -12,7 +12,6 @@ from texocad_agents.storage import (
     ensure_design,
     get_design_tables,
     get_storage_container,
-    new_id,
     upload_export_artifact,
     upload_source_artifact,
 )
@@ -22,18 +21,18 @@ from texocad_agents.storage import (
 def build_design(
     file_path: str,
     runtime: ToolRuntime,
-    design_id: str | None = None,
     revision_name: str | None = None,
 ) -> str:
     """Build CAD code and store a design revision with exported model files.
 
     Use this after writing or editing a CAD Python file in the agent filesystem.
     The tool saves the source, executes it in a sandbox, uploads generated model
-    exports, and returns the stored revision and artifact identifiers.
+    exports, and returns the stored revision and artifact identifiers. Each
+    LangGraph thread maps to exactly one design; every build in the same thread
+    creates a new revision for that design.
 
     Args:
         file_path: Path to the CAD Python file in the agent filesystem.
-        design_id: Existing design ID to add a revision to. Leave empty to create one.
         revision_name: Optional human-readable name for this design revision.
     """
 
@@ -49,9 +48,13 @@ def build_design(
     if not owner_id:
         return "Refused: cannot create design artifacts without an authenticated owner."
 
-    design_id = design_id or metadata.get("design_id") or new_id("design")
+    raw_thread_id = configurable.get("thread_id")
+    if not raw_thread_id:
+        return "Refused: cannot create design artifacts without a LangGraph thread_id."
+
+    thread_id = str(raw_thread_id)
+    design_id = thread_id
     revision_name = revision_name or metadata.get("revision_name")
-    thread_id = configurable.get("thread_id")
     run_id = configurable.get("run_id") or metadata.get("run_id")
 
     tables = get_design_tables()
@@ -129,12 +132,10 @@ def build_design(
                 created_by_thread_id=thread_id,
                 created_by_run_id=run_id,
             )
-            exports.append(
-                {
-                    "filename": model_path.name,
-                    "artifact_revision_id": export_artifact.artifact_revision_id,
-                }
-            )
+            exports.append({
+                "filename": model_path.name,
+                "artifact_revision_id": export_artifact.artifact_revision_id,
+            })
 
     return _tool_summary(
         design_id=design_id,
