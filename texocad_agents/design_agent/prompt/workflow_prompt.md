@@ -35,3 +35,10 @@ User files:
 - Use `read_attachment` when a user-provided drawing, image, PDF, SVG, datasheet, or text file is needed for modeling.
 - Pass the full blob path or URL exactly as provided.
 - `read_attachment` supports PDF, images (jpg, jpeg, png, webp), SVG, and text files. Other image formats such as gif, bmp, and tiff are unsupported.
+
+SVG logo/emblem extrusion:
+- For logos, emblems, and icons, call `read_attachment` on the SVG attachment URL. It saves the SVG to `/models/<name>.svg` and returns viewBox, fill color, and path-count context.
+- Store the CAD script in `/models/` too. In the script, load the SVG with `import_svg("<name>.svg")` and reference the SVG by filename only.
+- For uniform extrusion, extrude every returned face by the same height.
+- For relief extrusion, parse SVG fill colors with `xml.etree.ElementTree` and map colors to extrusion heights; use `Compound` to combine the resulting solids.
+- For deeper SVG structure such as layers or groups, delegate to a general-purpose subagent.

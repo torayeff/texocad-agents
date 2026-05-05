@@ -97,10 +97,37 @@ def build_design(
         created_by_run_id=run_id,
     )
 
+    files = runtime.state.get("files", {}) if isinstance(runtime.state, dict) else {}
+    script_path = PurePosixPath(
+        file_path if file_path.startswith("/") else f"/{file_path}"
+    )
+    support_files: dict[str, bytes] = {}
+    if isinstance(files, dict):
+        for candidate_path, value in files.items():
+            normalized_path = (
+                candidate_path
+                if str(candidate_path).startswith("/")
+                else f"/{candidate_path}"
+            )
+            attachment_path = PurePosixPath(str(normalized_path))
+            if (
+                attachment_path.parent == script_path.parent
+                and attachment_path.suffix.lower() == ".svg"
+            ):
+                content = _file_text(value)
+                if content is not None:
+                    support_files[attachment_path.name] = content.encode("utf-8")
+
     daytona = Daytona()
     ensure_snapshot(daytona, SANDBOX_CONFIG)
     with tempfile.TemporaryDirectory() as tmpdir:
-        result = run_code(daytona, code, Path(tmpdir), SANDBOX_CONFIG)
+        result = run_code(
+            daytona,
+            code,
+            Path(tmpdir),
+            SANDBOX_CONFIG,
+            support_files=support_files,
+        )
 
         if result.exit_code != 0:
             return (

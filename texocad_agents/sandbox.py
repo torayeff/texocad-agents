@@ -78,6 +78,8 @@ def run_code(
     code: str,
     output_dir: Path,
     config: SandboxConfig = SANDBOX_CONFIG,
+    *,
+    support_files: dict[str, bytes] | None = None,
 ) -> SandboxRunResult:
     sandbox = None
 
@@ -100,6 +102,11 @@ def run_code(
         sandbox.fs.upload_file(
             code.encode("utf-8"), posixpath.join(work_dir, "main.py")
         )
+        for filename, contents in sorted((support_files or {}).items()):
+            sandbox.fs.upload_file(
+                contents,
+                posixpath.join(work_dir, posixpath.basename(filename)),
+            )
 
         response = sandbox.process.exec(
             "python main.py 2>&1",
