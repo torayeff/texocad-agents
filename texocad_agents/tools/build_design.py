@@ -7,13 +7,13 @@ from langgraph.prebuilt.tool_node import ToolRuntime
 
 from texocad_agents.sandbox import SANDBOX_CONFIG, ensure_snapshot, run_code
 from texocad_agents.storage import (
-    create_artifact_revision,
     create_design_revision,
     ensure_design,
     get_design_tables,
     get_storage_container,
-    upload_export_artifact,
-    upload_source_artifact,
+    save_design_revision_blobs,
+    upload_export_blob,
+    upload_source_blob,
 )
 
 
@@ -21,19 +21,17 @@ from texocad_agents.storage import (
 def build_design(
     file_path: str,
     runtime: ToolRuntime,
-    revision_name: str | None = None,
 ) -> str:
     """Build CAD code and store a design revision with exported model files.
 
     Use this after writing or editing a CAD Python file in the agent filesystem.
     The tool saves the source, executes it in a sandbox, uploads generated model
-    exports, and returns the stored revision and artifact identifiers. Each
-    LangGraph thread maps to exactly one design; every build in the same thread
+    exports, and returns the stored revision and blob paths. Each LangGraph
+    thread maps to exactly one design; every successful build in the same thread
     creates a new revision for that design.
 
     Args:
         file_path: Path to the CAD Python file in the agent filesystem.
-        revision_name: Optional human-readable name for this design revision.
     """
 
     code = _read_runtime_file(file_path, runtime)
@@ -54,48 +52,7 @@ def build_design(
 
     thread_id = str(raw_thread_id)
     design_id = thread_id
-    revision_name = revision_name or metadata.get("revision_name")
     run_id = configurable.get("run_id") or metadata.get("run_id")
-
-    tables = get_design_tables()
-    storage_container = get_storage_container()
-    ensure_design(
-        tables.designs,
-        owner_id,
-        design_id,
-        title=metadata.get("title") or PurePosixPath(file_path).stem,
-        created_by_thread_id=thread_id,
-        created_by_run_id=run_id,
-    )
-    design_revision = create_design_revision(
-        tables.design_revisions,
-        owner_id,
-        design_id,
-        revision_name=revision_name,
-        created_by_thread_id=thread_id,
-        created_by_run_id=run_id,
-    )
-    revision_number = int(design_revision["revision_number"])
-    design_revision_id = design_revision["design_revision_id"]
-
-    source_artifact = upload_source_artifact(
-        storage_container,
-        owner_id,
-        design_id,
-        design_revision_id,
-        revision_number,
-        code,
-    )
-    create_artifact_revision(
-        tables.artifact_revisions,
-        owner_id,
-        design_id,
-        design_revision_id,
-        source_artifact,
-        filename=PurePosixPath(file_path).name,
-        created_by_thread_id=thread_id,
-        created_by_run_id=run_id,
-    )
 
     files = runtime.state.get("files", {}) if isinstance(runtime.state, dict) else {}
     script_path = PurePosixPath(
@@ -133,41 +90,58 @@ def build_design(
             return (
                 "Sandbox execution failed.\n"
                 f"design_id: {design_id}\n"
-                f"design_revision_id: {design_revision_id}\n"
-                f"source_artifact_revision_id: {source_artifact.artifact_revision_id}\n"
+                "revision_created: false\n"
                 f"exit_code: {result.exit_code}\n"
                 f"output:\n{result.output.strip()}"
             )
 
+        tables = get_design_tables()
+        storage_container = get_storage_container()
+        ensure_design(
+            tables.designs,
+            owner_id,
+            design_id,
+            title=metadata.get("title") or PurePosixPath(file_path).stem,
+            created_by_thread_id=thread_id,
+            created_by_run_id=run_id,
+        )
+        design_revision = create_design_revision(
+            tables.design_revisions,
+            owner_id,
+            design_id,
+            created_by_thread_id=thread_id,
+            created_by_run_id=run_id,
+        )
+        revision_number = int(design_revision["revision_number"])
+        source_blob = upload_source_blob(
+            storage_container,
+            owner_id,
+            design_id,
+            revision_number,
+            PurePosixPath(file_path).name,
+            code,
+        )
         exports = []
         for model_path in result.model_paths:
-            export_artifact = upload_export_artifact(
+            export_blob = upload_export_blob(
                 storage_container,
                 owner_id,
                 design_id,
-                design_revision_id,
                 revision_number,
                 model_path,
             )
-            create_artifact_revision(
-                tables.artifact_revisions,
-                owner_id,
-                design_id,
-                design_revision_id,
-                export_artifact,
-                filename=model_path.name,
-                created_by_thread_id=thread_id,
-                created_by_run_id=run_id,
-            )
-            exports.append({
-                "filename": model_path.name,
-                "artifact_revision_id": export_artifact.artifact_revision_id,
-            })
+            exports.append(export_blob)
 
+    design_revision = save_design_revision_blobs(
+        tables.design_revisions,
+        design_revision,
+        source_blob,
+        exports,
+    )
     return _tool_summary(
         design_id=design_id,
         design_revision=design_revision,
-        source_artifact_id=source_artifact.artifact_revision_id,
+        source_blob=source_blob,
         exports=exports,
         sandbox_output=result.output,
     )
@@ -205,23 +179,19 @@ def _tool_summary(
     *,
     design_id: str,
     design_revision: dict,
-    source_artifact_id: str,
-    exports: list[dict[str, str]],
+    source_blob,
+    exports: list,
     sandbox_output: str,
 ) -> str:
     lines = [
         "Created design revision.",
         f"design_id: {design_id}",
-        f"design_revision_id: {design_revision['design_revision_id']}",
         f"revision_number: {design_revision['revision_number']}",
-        f"source_artifact_revision_id: {source_artifact_id}",
+        f"source_blob_name: {source_blob.blob_name}",
     ]
     if exports:
         lines.append("exports:")
-        lines.extend(
-            f"- {export['filename']}: {export['artifact_revision_id']}"
-            for export in exports
-        )
+        lines.extend(f"- {export.filename}: {export.blob_name}" for export in exports)
     else:
         lines.append("exports: none")
     if sandbox_output.strip():

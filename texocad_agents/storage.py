@@ -1,18 +1,17 @@
 import hashlib
+import json
 import os
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import unquote, urlparse
-from uuid import uuid4
 
-from azure.core.exceptions import ResourceNotFoundError
+from azure.core.exceptions import ResourceExistsError, ResourceNotFoundError
 from azure.data.tables import TableServiceClient
 from azure.storage.blob import BlobServiceClient, ContentSettings
 
 DESIGNS_TABLE_NAME = "texocaddesigns"
 DESIGN_REVISIONS_TABLE_NAME = "texocaddesignrevisions"
-ARTIFACT_REVISIONS_TABLE_NAME = "texocadartifactrevisions"
 
 SOURCE_CONTENT_TYPE = "text/x-python; charset=utf-8"
 MODEL_CONTENT_TYPES = {
@@ -28,14 +27,11 @@ MODEL_CONTENT_TYPES = {
 class DesignTables:
     designs: object
     design_revisions: object
-    artifact_revisions: object
 
 
 @dataclass(frozen=True)
-class StoredArtifact:
-    artifact_revision_id: str
-    artifact_type: str
-    revision_number: int
+class StoredBlob:
+    filename: str
     blob_name: str
     content_type: str
     checksum: str
@@ -56,53 +52,7 @@ def get_design_tables() -> DesignTables:
         design_revisions=service.create_table_if_not_exists(
             DESIGN_REVISIONS_TABLE_NAME
         ),
-        artifact_revisions=service.create_table_if_not_exists(
-            ARTIFACT_REVISIONS_TABLE_NAME
-        ),
     )
-
-
-def table_key_fields(owner_id: str, row_key: str) -> dict[str, str]:
-    return {
-        "PartitionKey": safe_key(owner_id),
-        "RowKey": row_key,
-    }
-
-
-def design_revision_row_key(design_id: str, design_revision_id: str) -> str:
-    return f"{safe_key(design_id)}:{safe_key(design_revision_id)}"
-
-
-def artifact_revision_row_key(
-    design_id: str,
-    design_revision_id: str,
-    artifact_revision_id: str,
-) -> str:
-    return (
-        f"{safe_key(design_id)}:{safe_key(design_revision_id)}:"
-        f"{safe_key(artifact_revision_id)}"
-    )
-
-
-def lineage_fields(
-    created_by_thread_id: str | None,
-    created_by_run_id: str | None,
-) -> dict[str, str]:
-    return {
-        "created_at": now_iso(),
-        "created_by_thread_id": created_by_thread_id or "",
-        "created_by_run_id": created_by_run_id or "",
-    }
-
-
-def get_design(designs_table, owner_id: str, design_id: str):
-    try:
-        return designs_table.get_entity(
-            partition_key=safe_key(owner_id),
-            row_key=safe_key(design_id),
-        )
-    except ResourceNotFoundError:
-        return None
 
 
 def ensure_design(
@@ -114,12 +64,16 @@ def ensure_design(
     created_by_thread_id: str | None,
     created_by_run_id: str | None,
 ):
-    existing = get_design(designs_table, owner_id, design_id)
-    if existing is not None:
-        return existing
+    try:
+        return designs_table.get_entity(
+            partition_key=safe_key(owner_id),
+            row_key=safe_key(design_id),
+        )
+    except ResourceNotFoundError:
+        pass
 
     entity = {
-        **table_key_fields(owner_id, safe_key(design_id)),
+        **azure_table_keys(owner_id, safe_key(design_id)),
         "design_id": design_id,
         "owner_id": owner_id,
         "title": title or design_id,
@@ -139,87 +93,80 @@ def list_design_revisions(design_revisions_table, owner_id: str, design_id: str)
     return sorted(revisions, key=lambda revision: revision["revision_number"])
 
 
+def next_design_revision_number(
+    design_revisions_table,
+    owner_id: str,
+    design_id: str,
+) -> int:
+    revisions = list_design_revisions(design_revisions_table, owner_id, design_id)
+    if not revisions:
+        return 1
+    return int(revisions[-1]["revision_number"]) + 1
+
+
 def create_design_revision(
     design_revisions_table,
     owner_id: str,
     design_id: str,
     *,
-    revision_name: str | None,
     created_by_thread_id: str | None,
     created_by_run_id: str | None,
 ):
-    revision_number = next_design_revision_number(
-        design_revisions_table,
-        owner_id,
-        design_id,
-    )
-    design_revision_id = new_id("drev")
-    entity = {
-        **table_key_fields(
-            owner_id,
-            design_revision_row_key(design_id, design_revision_id),
-        ),
-        "design_revision_id": design_revision_id,
-        "design_id": design_id,
-        "owner_id": owner_id,
-        "revision_number": revision_number,
-        "revision_name": revision_name or f"r{revision_number}",
-        **lineage_fields(created_by_thread_id, created_by_run_id),
-    }
-    design_revisions_table.create_entity(entity)
-    return entity
-
-
-def create_artifact_revision(
-    artifact_revisions_table,
-    owner_id: str,
-    design_id: str,
-    design_revision_id: str,
-    artifact: StoredArtifact,
-    *,
-    filename: str,
-    created_by_thread_id: str | None,
-    created_by_run_id: str | None,
-):
-    entity = {
-        **table_key_fields(
-            owner_id,
-            artifact_revision_row_key(
-                design_id,
-                design_revision_id,
-                artifact.artifact_revision_id,
+    for _ in range(5):
+        revision_number = next_design_revision_number(
+            design_revisions_table, owner_id, design_id
+        )
+        entity = {
+            **azure_table_keys(
+                owner_id,
+                f"{safe_key(design_id)}:{revision_number}",
             ),
-        ),
-        "artifact_revision_id": artifact.artifact_revision_id,
-        "artifact_type": artifact.artifact_type,
-        "design_id": design_id,
-        "design_revision_id": design_revision_id,
-        "owner_id": owner_id,
-        "revision_number": artifact.revision_number,
-        "filename": filename,
-        "blob_name": artifact.blob_name,
-        "content_type": artifact.content_type,
-        "checksum": artifact.checksum,
-        **lineage_fields(created_by_thread_id, created_by_run_id),
-    }
-    artifact_revisions_table.create_entity(entity)
+            "design_id": design_id,
+            "owner_id": owner_id,
+            "revision_number": revision_number,
+            "source_filename": "",
+            "source_blob_name": "",
+            "source_content_type": "",
+            "source_checksum": "",
+            "exports_json": "[]",
+            **lineage_fields(created_by_thread_id, created_by_run_id),
+        }
+        try:
+            design_revisions_table.create_entity(entity)
+            return entity
+        except ResourceExistsError:
+            continue
+    raise RuntimeError("Could not create a unique design revision.")
+
+
+def save_design_revision_blobs(
+    design_revisions_table,
+    design_revision: dict,
+    source: StoredBlob,
+    exports: list[StoredBlob],
+):
+    entity = dict(design_revision)
+    entity.update({
+        "source_filename": source.filename,
+        "source_blob_name": source.blob_name,
+        "source_content_type": source.content_type,
+        "source_checksum": source.checksum,
+        "exports_json": json.dumps([asdict(export) for export in exports]),
+    })
+    design_revisions_table.upsert_entity(entity)
     return entity
 
 
-def upload_source_artifact(
+def upload_source_blob(
     storage_container,
     owner_id: str,
     design_id: str,
-    design_revision_id: str,
     revision_number: int,
+    filename: str,
     code: str,
-) -> StoredArtifact:
-    artifact_revision_id = new_id("src")
-    blob_name = source_blob_name(
-        owner_id,
-        design_id,
-        design_revision_id,
-        artifact_revision_id,
+) -> StoredBlob:
+    blob_name = revision_blob_name(
+        owner_id, design_id, revision_number, "source", filename
     )
     data = code.encode("utf-8")
     storage_container.get_blob_client(blob_name).upload_blob(
@@ -227,37 +174,35 @@ def upload_source_artifact(
         overwrite=False,
         content_settings=ContentSettings(content_type=SOURCE_CONTENT_TYPE),
     )
-    return StoredArtifact(
-        artifact_revision_id=artifact_revision_id,
-        artifact_type="source",
-        revision_number=revision_number,
+    return StoredBlob(
+        filename=filename,
         blob_name=blob_name,
         content_type=SOURCE_CONTENT_TYPE,
-        checksum=sha256_bytes(data),
+        checksum=hashlib.sha256(data).hexdigest(),
     )
 
 
-def upload_export_artifact(
+def upload_export_blob(
     storage_container,
     owner_id: str,
     design_id: str,
-    design_revision_id: str,
     revision_number: int,
     model_path: Path,
-) -> StoredArtifact:
-    artifact_revision_id = new_id("exp")
-    extension = model_blob_extension(model_path)
+) -> StoredBlob:
+    suffix = model_path.suffix.lower()
+    extension = ".step" if suffix == ".stp" else suffix
+    filename = f"{safe_key(model_path.stem)}{extension}"
     content_type = MODEL_CONTENT_TYPES.get(extension, "application/octet-stream")
-    blob_name = export_blob_name(
+    blob_name = revision_blob_name(
         owner_id,
         design_id,
-        design_revision_id,
-        artifact_revision_id,
-        extension,
+        revision_number,
+        "exports",
+        filename,
     )
     content_settings = ContentSettings(
         content_type=content_type,
-        content_disposition=f'attachment; filename="{artifact_revision_id}{extension}"',
+        content_disposition=f'attachment; filename="{filename}"',
     )
 
     with model_path.open("rb") as model_file:
@@ -267,10 +212,8 @@ def upload_export_artifact(
             content_settings=content_settings,
         )
 
-    return StoredArtifact(
-        artifact_revision_id=artifact_revision_id,
-        artifact_type="export",
-        revision_number=revision_number,
+    return StoredBlob(
+        filename=filename,
         blob_name=blob_name,
         content_type=content_type,
         checksum=sha256_file(model_path),
@@ -289,12 +232,36 @@ def blob_path_from_url(value: str, container_name: str | None = None) -> str:
     return "/".join(parts)
 
 
-def new_id(prefix: str) -> str:
-    return f"{prefix}_{uuid4().hex}"
+def revision_blob_name(
+    owner_id: str,
+    design_id: str,
+    revision_number: int,
+    folder: str,
+    filename: str,
+) -> str:
+    return (
+        f"designs/{safe_key(owner_id)}/{safe_key(design_id)}"
+        f"/revisions/{revision_number}"
+        f"/{safe_key(folder)}/{safe_key(filename)}"
+    )
 
 
-def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+def azure_table_keys(owner_id: str, row_key: str) -> dict[str, str]:
+    return {
+        "PartitionKey": safe_key(owner_id),
+        "RowKey": row_key,
+    }
+
+
+def lineage_fields(
+    created_by_thread_id: str | None,
+    created_by_run_id: str | None,
+) -> dict[str, str]:
+    return {
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_by_thread_id": created_by_thread_id or "",
+        "created_by_run_id": created_by_run_id or "",
+    }
 
 
 def safe_key(value: str) -> str:
@@ -305,62 +272,6 @@ def safe_key(value: str) -> str:
 def odata_string(value: str) -> str:
     escaped = value.replace("'", "''")
     return f"'{escaped}'"
-
-
-def next_design_revision_number(
-    design_revisions_table,
-    owner_id: str,
-    design_id: str,
-) -> int:
-    revisions = list_design_revisions(design_revisions_table, owner_id, design_id)
-    if not revisions:
-        return 1
-    return int(revisions[-1]["revision_number"]) + 1
-
-
-def model_blob_extension(model_path: Path) -> str:
-    suffix = model_path.suffix.lower()
-    return ".step" if suffix == ".stp" else suffix
-
-
-def source_blob_name(
-    owner_id: str,
-    design_id: str,
-    design_revision_id: str,
-    artifact_revision_id: str,
-) -> str:
-    return (
-        f"{design_revision_blob_prefix(owner_id, design_id, design_revision_id)}"
-        f"/source/{safe_key(artifact_revision_id)}.py"
-    )
-
-
-def design_revision_blob_prefix(
-    owner_id: str,
-    design_id: str,
-    design_revision_id: str,
-) -> str:
-    return (
-        f"designs/{safe_key(owner_id)}/{safe_key(design_id)}"
-        f"/revisions/{safe_key(design_revision_id)}"
-    )
-
-
-def export_blob_name(
-    owner_id: str,
-    design_id: str,
-    design_revision_id: str,
-    artifact_revision_id: str,
-    extension: str,
-) -> str:
-    return (
-        f"{design_revision_blob_prefix(owner_id, design_id, design_revision_id)}"
-        f"/exports/{safe_key(artifact_revision_id)}{extension}"
-    )
-
-
-def sha256_bytes(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
 
 
 def sha256_file(path: Path) -> str:
