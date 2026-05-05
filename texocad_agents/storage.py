@@ -10,9 +10,9 @@ from azure.core.exceptions import ResourceNotFoundError
 from azure.data.tables import TableServiceClient
 from azure.storage.blob import BlobServiceClient, ContentSettings
 
-DESIGNS_TABLE_NAME = "designs"
-DESIGN_REVISIONS_TABLE_NAME = "designrevisions"
-ARTIFACT_REVISIONS_TABLE_NAME = "artifactrevisions"
+DESIGNS_TABLE_NAME = "texocaddesigns"
+DESIGN_REVISIONS_TABLE_NAME = "texocaddesignrevisions"
+ARTIFACT_REVISIONS_TABLE_NAME = "texocadartifactrevisions"
 
 SOURCE_CONTENT_TYPE = "text/x-python; charset=utf-8"
 MODEL_CONTENT_TYPES = {
@@ -109,12 +109,10 @@ def list_designs(designs_table, owner_id: str):
 
 def list_design_revisions(design_revisions_table, owner_id: str, design_id: str):
     revisions = design_revisions_table.query_entities(
-        " and ".join(
-            [
-                f"PartitionKey eq {odata_string(safe_key(owner_id))}",
-                f"design_id eq {odata_string(design_id)}",
-            ]
-        )
+        " and ".join([
+            f"PartitionKey eq {odata_string(safe_key(owner_id))}",
+            f"design_id eq {odata_string(design_id)}",
+        ])
     )
     return sorted(revisions, key=lambda revision: revision["revision_number"])
 
