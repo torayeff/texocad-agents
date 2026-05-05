@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "texocad"
+version = "0.1.0"
+description = "TexoCAD Agents"
+requires-python = ">=3.12"
+dependencies = [
+    "azure-data-tables",
+    "azure-storage-blob",
+    "botocore",
+    "build123d",
+    "daytona",
+    "deepagents",
+    "httpx",
+    "langchain",
+    "langchain-anthropic",
+    "langchain-aws",
+    "langchain-community",
+    "langchain-google-genai",
+    "langchain-openai",
+    "langgraph",
+    "langgraph-sdk",
+    "numpy",
+    "pinecone",
+    "pymupdf",
+    "PyJWT[crypto]",
+    "python-dotenv",
+    "trimesh",
+    "python-ulid",
+]
+
+[project.optional-dependencies]
+dev = [
+    "langgraph-api",
+    "langgraph-cli[inmem]",
+]
+all = [
+    "texocad[dev]",
+]
+
+[tool.setuptools]
+packages = ["design_agent"]
+py-modules = ["auth", "google_auth", "sandbox", "storage", "tools"]
+
+[tool.setuptools.package-data]
+design_agent = ["prompt.md"]
