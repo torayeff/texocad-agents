@@ -20,7 +20,6 @@ from storage import (
     create_artifact_revision,
     create_design_revision,
     ensure_design,
-    get_cloud_storage,
     get_design_tables,
     get_storage_container,
     new_id,
@@ -65,96 +64,6 @@ def _summarize_svg(svg_text: str) -> str:
         lines.append(f"fill colors ({len(unique_colors)}): {', '.join(unique_colors)}")
 
     return "\n".join(lines)
-
-
-@tool
-def parse_file(blob_name: str, runtime: ToolRuntime) -> Command | list | str:
-    """Parse an uploaded file from the current thread or authenticated user scope."""
-    thread_id = runtime.config["configurable"]["thread_id"]
-    auth_user = runtime.config["configurable"].get("langgraph_auth_user") or {}
-    user_id = auth_user.get("identity")
-
-    blob_name = blob_path_from_url(blob_name)
-    allowed_prefixes: tuple[str, ...] = (f"threads/{thread_id}/",)
-    if user_id:
-        allowed_prefixes += (f"uploads/{user_id}/",)
-
-    if not blob_name.startswith(allowed_prefixes):
-        return (
-            "Refused: blob path is outside this thread/user scope. "
-            "Attachments must live under "
-            f"'threads/{thread_id}/...'"
-            + (f" or 'uploads/{user_id}/...'." if user_id else ".")
-        )
-
-    supported_image_types = {
-        ".png": "image/png",
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".webp": "image/webp",
-    }
-    render_dpi = 300
-
-    storage = get_cloud_storage()
-    filename = PurePosixPath(blob_name).name
-    extension = PurePosixPath(filename).suffix.lower()
-    mime_type, _ = mimetypes.guess_type(filename)
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        local_path = Path(tmpdir) / filename
-        storage.download(blob_name, local_path)
-        raw_bytes = local_path.read_bytes()
-
-    if extension == ".svg":
-        svg_text = raw_bytes.decode("utf-8")
-        summary = _summarize_svg(svg_text)
-        file_path = f"/models/{PurePosixPath(filename).stem}.svg"
-        return Command(
-            update={
-                "files": {file_path: svg_text},
-                "messages": [
-                    ToolMessage(
-                        content=f"Saved SVG to {file_path}.\n{summary}",
-                        tool_call_id=runtime.tool_call_id,
-                    )
-                ],
-            }
-        )
-
-    if mime_type == "application/pdf":
-        document = fitz.open(stream=raw_bytes, filetype="pdf")
-        blocks = []
-        try:
-            for index, page in enumerate(document, start=1):
-                png_bytes = page.get_pixmap(dpi=render_dpi).tobytes("png")
-                png_b64 = base64.b64encode(png_bytes).decode("utf-8")
-                blocks.append(create_text_block(text=f"Page {index}:"))
-                blocks.append(create_image_block(base64=png_b64, mime_type="image/png"))
-        finally:
-            document.close()
-        n_pages = len(blocks) // 2
-        blocks.insert(
-            0,
-            create_text_block(
-                text=f"Read '{blob_name}' - {n_pages} page(s) at {render_dpi} DPI:"
-            ),
-        )
-        return blocks
-
-    if mime_type and mime_type.startswith("image/"):
-        if extension not in supported_image_types:
-            return (
-                f"Unsupported image format '{extension}'. "
-                "Only .jpg, .jpeg, .png, and .webp images can be analyzed visually."
-            )
-        media = supported_image_types[extension]
-        img_b64 = base64.b64encode(raw_bytes).decode("utf-8")
-        return [
-            create_text_block(text=f"Read '{blob_name}':"),
-            create_image_block(base64=img_b64, mime_type=media),
-        ]
-
-    return f"Read '{blob_name}':\n\n{raw_bytes.decode('utf-8')}"
 
 
 def _runtime_config(runtime: ToolRuntime) -> dict[str, Any]:
@@ -237,13 +146,121 @@ def _tool_summary(
     return "\n".join(lines)
 
 
-@tool
-def execute_model(
+@tool(parse_docstring=True)
+def read_attachment(attachment_path: str, runtime: ToolRuntime) -> Command | list | str:
+    """Read an uploaded design reference or attachment.
+
+    Use this when the user asks about an uploaded image, PDF, SVG, or text file.
+    The attachment must belong to the current thread or authenticated user scope.
+
+    Args:
+        attachment_path: Blob path or URL for the uploaded attachment.
+    """
+    thread_id = runtime.config["configurable"]["thread_id"]
+    auth_user = runtime.config["configurable"].get("langgraph_auth_user") or {}
+    user_id = auth_user.get("identity")
+
+    blob_name = blob_path_from_url(attachment_path)
+    allowed_prefixes: tuple[str, ...] = (f"threads/{thread_id}/",)
+    if user_id:
+        allowed_prefixes += (f"uploads/{user_id}/",)
+
+    if not blob_name.startswith(allowed_prefixes):
+        return (
+            "Refused: blob path is outside this thread/user scope. "
+            "Attachments must live under "
+            f"'threads/{thread_id}/...'"
+            + (f" or 'uploads/{user_id}/...'." if user_id else ".")
+        )
+
+    supported_image_types = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+    }
+    render_dpi = 300
+
+    filename = PurePosixPath(blob_name).name
+    extension = PurePosixPath(filename).suffix.lower()
+    mime_type, _ = mimetypes.guess_type(filename)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        local_path = Path(tmpdir) / filename
+        blob_client = get_storage_container().get_blob_client(blob_name)
+        local_path.write_bytes(blob_client.download_blob().readall())
+        raw_bytes = local_path.read_bytes()
+
+    if extension == ".svg":
+        svg_text = raw_bytes.decode("utf-8")
+        summary = _summarize_svg(svg_text)
+        file_path = f"/models/{PurePosixPath(filename).stem}.svg"
+        return Command(
+            update={
+                "files": {file_path: svg_text},
+                "messages": [
+                    ToolMessage(
+                        content=f"Saved SVG to {file_path}.\n{summary}",
+                        tool_call_id=runtime.tool_call_id,
+                    )
+                ],
+            }
+        )
+
+    if mime_type == "application/pdf":
+        document = fitz.open(stream=raw_bytes, filetype="pdf")
+        blocks = []
+        try:
+            for index, page in enumerate(document, start=1):
+                png_bytes = page.get_pixmap(dpi=render_dpi).tobytes("png")
+                png_b64 = base64.b64encode(png_bytes).decode("utf-8")
+                blocks.append(create_text_block(text=f"Page {index}:"))
+                blocks.append(create_image_block(base64=png_b64, mime_type="image/png"))
+        finally:
+            document.close()
+        n_pages = len(blocks) // 2
+        blocks.insert(
+            0,
+            create_text_block(
+                text=f"Read '{blob_name}' - {n_pages} page(s) at {render_dpi} DPI:"
+            ),
+        )
+        return blocks
+
+    if mime_type and mime_type.startswith("image/"):
+        if extension not in supported_image_types:
+            return (
+                f"Unsupported image format '{extension}'. "
+                "Only .jpg, .jpeg, .png, and .webp images can be analyzed visually."
+            )
+        media = supported_image_types[extension]
+        img_b64 = base64.b64encode(raw_bytes).decode("utf-8")
+        return [
+            create_text_block(text=f"Read '{blob_name}':"),
+            create_image_block(base64=img_b64, mime_type=media),
+        ]
+
+    return f"Read '{blob_name}':\n\n{raw_bytes.decode('utf-8')}"
+
+
+@tool(parse_docstring=True)
+def build_design(
     file_path: str,
     runtime: ToolRuntime,
     design_id: str | None = None,
     revision_name: str | None = None,
 ) -> str:
+    """Build CAD code and store a design revision with exported model files.
+
+    Use this after writing or editing a CAD Python file in the agent filesystem.
+    The tool saves the source, executes it in a sandbox, uploads generated model
+    exports, and returns the stored revision and artifact identifiers.
+
+    Args:
+        file_path: Path to the CAD Python file in the agent filesystem.
+        design_id: Existing design ID to add a revision to. Leave empty to create one.
+        revision_name: Optional human-readable name for this design revision.
+    """
 
     code = _read_runtime_file(file_path, runtime)
     if code is None:
@@ -334,10 +351,12 @@ def execute_model(
                 created_by_thread_id=thread_id,
                 created_by_run_id=run_id,
             )
-            exports.append({
-                "filename": model_path.name,
-                "artifact_revision_id": export_artifact.artifact_revision_id,
-            })
+            exports.append(
+                {
+                    "filename": model_path.name,
+                    "artifact_revision_id": export_artifact.artifact_revision_id,
+                }
+            )
 
     return _tool_summary(
         design_id=design_id,

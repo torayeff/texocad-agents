@@ -2,17 +2,14 @@ import os
 from pathlib import Path
 
 from deepagents import create_deep_agent
-from dotenv import load_dotenv
 from langchain.chat_models import init_chat_model
 from langchain_anthropic import ChatAnthropic
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph.state import CompiledStateGraph
 
 from design_agent.conf import DEFAULT_MODEL, MODELS
-from google_auth import with_vertex_credentials
-from tools import execute_model, parse_file
-
-load_dotenv(override=True)
+from google_auth import with_google_vertex_credentials
+from tools import build_design, read_attachment
 
 
 async def create_design_agent(config: RunnableConfig) -> CompiledStateGraph:
@@ -38,12 +35,12 @@ async def create_design_agent(config: RunnableConfig) -> CompiledStateGraph:
         model = init_chat_model(
             model_config.name,
             model_provider=model_config.provider,
-            **with_vertex_credentials(model_config.kwargs),
+            **with_google_vertex_credentials(model_config.kwargs),
         )
 
     return create_deep_agent(
         model=model,
-        tools=[execute_model, parse_file],
+        tools=[build_design, read_attachment],
         system_prompt=system_prompt,
         name="design-agent",
     )

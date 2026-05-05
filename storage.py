@@ -41,15 +41,6 @@ class StoredArtifact:
     checksum: str
 
 
-class CloudStorage:
-    def __init__(self, container):
-        self.container = container
-
-    def download(self, blob_name: str, destination: Path) -> None:
-        data = self.container.get_blob_client(blob_name).download_blob().readall()
-        destination.write_bytes(data)
-
-
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -67,10 +58,6 @@ def get_storage_container():
     return BlobServiceClient.from_connection_string(
         os.environ["AZURE_STORAGE_CONNECTION_STRING"]
     ).get_container_client(os.environ["AZURE_STORAGE_CONTAINER_NAME"])
-
-
-def get_cloud_storage() -> CloudStorage:
-    return CloudStorage(get_storage_container())
 
 
 def get_design_tables() -> DesignTables:
@@ -196,10 +183,12 @@ def list_designs(designs_table, owner_id: str):
 
 def list_design_revisions(design_revisions_table, owner_id: str, design_id: str):
     revisions = design_revisions_table.query_entities(
-        " and ".join([
-            f"PartitionKey eq {odata_string(safe_key(owner_id))}",
-            f"design_id eq {odata_string(design_id)}",
-        ])
+        " and ".join(
+            [
+                f"PartitionKey eq {odata_string(safe_key(owner_id))}",
+                f"design_id eq {odata_string(design_id)}",
+            ]
+        )
     )
     return sorted(revisions, key=lambda revision: revision["revision_number"])
 

@@ -1,4 +1,5 @@
 import posixpath
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
@@ -24,6 +25,7 @@ class SandboxConfig:
     memory: int = 8
     create_timeout: int = 300
     exec_timeout: int = 300
+    snapshot_poll_interval: float = 2.0
     network_block_all: bool = True
 
 
@@ -37,6 +39,39 @@ class SandboxRunResult:
     model_paths: tuple[Path, ...] = ()
 
 
+def _snapshot_state(snapshot: object) -> str:
+    raw_state = getattr(snapshot, "state", "")
+    state_value = getattr(raw_state, "value", raw_state)
+    return str(state_value).strip().lower().split(".")[-1].replace("_", " ")
+
+
+def _wait_for_active_snapshot(
+    daytona: Daytona,
+    snapshot: object,
+    config: SandboxConfig,
+) -> None:
+    deadline = (
+        None if config.create_timeout == 0 else time.monotonic() + config.create_timeout
+    )
+
+    while True:
+        state = _snapshot_state(snapshot)
+        if state == "active":
+            return
+        if state in {"error", "build failed", "removing"}:
+            raise RuntimeError(
+                f"Snapshot {config.snapshot_name!r} is not usable; current state: {state}"
+            )
+        if deadline is not None and time.monotonic() >= deadline:
+            raise RuntimeError(
+                f"Snapshot {config.snapshot_name!r} did not become active before timeout; "
+                f"current state: {state or 'unknown'}"
+            )
+
+        time.sleep(config.snapshot_poll_interval)
+        snapshot = daytona.snapshot.get(config.snapshot_name)
+
+
 def ensure_snapshot(daytona: Daytona, config: SandboxConfig = SANDBOX_CONFIG) -> None:
     try:
         snapshot = daytona.snapshot.get(config.snapshot_name)
@@ -46,8 +81,7 @@ def ensure_snapshot(daytona: Daytona, config: SandboxConfig = SANDBOX_CONFIG) ->
 
         apt_packages = " ".join(config.apt_packages)
         image = (
-            Image
-            .debian_slim(config.python_version)
+            Image.debian_slim(config.python_version)
             .run_commands(
                 "apt-get update && "
                 f"apt-get install -y --no-install-recommends {apt_packages} && "
@@ -64,17 +98,11 @@ def ensure_snapshot(daytona: Daytona, config: SandboxConfig = SANDBOX_CONFIG) ->
             timeout=config.create_timeout,
         )
 
-    state_value = getattr(getattr(snapshot, "state", ""), "value", snapshot.state)
-    state = str(state_value).strip().lower().split(".")[-1].replace("_", " ")
+    state = _snapshot_state(snapshot)
     if state == "inactive":
         snapshot = daytona.snapshot.activate(snapshot)
-        state_value = getattr(getattr(snapshot, "state", ""), "value", snapshot.state)
-        state = str(state_value).strip().lower().split(".")[-1].replace("_", " ")
 
-    if state != "active":
-        raise RuntimeError(
-            f"Snapshot {config.snapshot_name!r} is not active; current state: {state or 'unknown'}"
-        )
+    _wait_for_active_snapshot(daytona, snapshot, config)
 
 
 def run_code(

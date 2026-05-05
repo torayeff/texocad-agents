@@ -4,7 +4,9 @@ import os
 from google.oauth2.service_account import Credentials as ServiceAccountCredentials
 
 
-def with_vertex_credentials(model_kwargs: dict) -> dict:
+def with_google_vertex_credentials(
+    model_kwargs: dict[str, object],
+) -> dict[str, object]:
     resolved_kwargs = dict(model_kwargs)
     if not resolved_kwargs.get("vertexai"):
         return resolved_kwargs
