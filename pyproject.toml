@@ -10,26 +10,17 @@ requires-python = ">=3.12"
 dependencies = [
     "azure-data-tables",
     "azure-storage-blob",
-    "botocore",
     "build123d",
     "daytona",
     "deepagents",
-    "httpx",
     "langchain",
     "langchain-anthropic",
-    "langchain-aws",
-    "langchain-community",
     "langchain-google-genai",
     "langchain-openai",
     "langgraph",
     "langgraph-sdk",
-    "numpy",
-    "pinecone",
     "pymupdf",
     "PyJWT[crypto]",
-    "python-dotenv",
-    "trimesh",
-    "python-ulid",
 ]
 
 [project.optional-dependencies]
@@ -41,12 +32,8 @@ all = [
     "texocad[dev]",
 ]
 
-[tool.setuptools]
-packages = [
-    "texocad_agents",
-    "texocad_agents.design_agent",
-    "texocad_agents.tools",
-]
+[tool.setuptools.packages.find]
+include = ["texocad_agents*"]
 
 [tool.setuptools.package-data]
 "texocad_agents.design_agent" = ["prompt/*.md"]

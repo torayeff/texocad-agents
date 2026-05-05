@@ -62,6 +62,39 @@ def get_design_tables() -> DesignTables:
     )
 
 
+def table_key_fields(owner_id: str, row_key: str) -> dict[str, str]:
+    return {
+        "PartitionKey": safe_key(owner_id),
+        "RowKey": row_key,
+    }
+
+
+def design_revision_row_key(design_id: str, design_revision_id: str) -> str:
+    return f"{safe_key(design_id)}:{safe_key(design_revision_id)}"
+
+
+def artifact_revision_row_key(
+    design_id: str,
+    design_revision_id: str,
+    artifact_revision_id: str,
+) -> str:
+    return (
+        f"{safe_key(design_id)}:{safe_key(design_revision_id)}:"
+        f"{safe_key(artifact_revision_id)}"
+    )
+
+
+def lineage_fields(
+    created_by_thread_id: str | None,
+    created_by_run_id: str | None,
+) -> dict[str, str]:
+    return {
+        "created_at": now_iso(),
+        "created_by_thread_id": created_by_thread_id or "",
+        "created_by_run_id": created_by_run_id or "",
+    }
+
+
 def get_design(designs_table, owner_id: str, design_id: str):
     try:
         return designs_table.get_entity(
@@ -86,25 +119,14 @@ def ensure_design(
         return existing
 
     entity = {
-        "PartitionKey": safe_key(owner_id),
-        "RowKey": safe_key(design_id),
+        **table_key_fields(owner_id, safe_key(design_id)),
         "design_id": design_id,
         "owner_id": owner_id,
         "title": title or design_id,
-        "created_at": now_iso(),
-        "created_by_thread_id": created_by_thread_id or "",
-        "created_by_run_id": created_by_run_id or "",
+        **lineage_fields(created_by_thread_id, created_by_run_id),
     }
     designs_table.create_entity(entity)
     return entity
-
-
-def list_designs(designs_table, owner_id: str):
-    return list(
-        designs_table.query_entities(
-            f"PartitionKey eq {odata_string(safe_key(owner_id))}"
-        )
-    )
 
 
 def list_design_revisions(design_revisions_table, owner_id: str, design_id: str):
@@ -133,16 +155,16 @@ def create_design_revision(
     )
     design_revision_id = new_id("drev")
     entity = {
-        "PartitionKey": safe_key(owner_id),
-        "RowKey": f"{safe_key(design_id)}:{safe_key(design_revision_id)}",
+        **table_key_fields(
+            owner_id,
+            design_revision_row_key(design_id, design_revision_id),
+        ),
         "design_revision_id": design_revision_id,
         "design_id": design_id,
         "owner_id": owner_id,
         "revision_number": revision_number,
         "revision_name": revision_name or f"r{revision_number}",
-        "created_at": now_iso(),
-        "created_by_thread_id": created_by_thread_id or "",
-        "created_by_run_id": created_by_run_id or "",
+        **lineage_fields(created_by_thread_id, created_by_run_id),
     }
     design_revisions_table.create_entity(entity)
     return entity
@@ -160,10 +182,13 @@ def create_artifact_revision(
     created_by_run_id: str | None,
 ):
     entity = {
-        "PartitionKey": safe_key(owner_id),
-        "RowKey": (
-            f"{safe_key(design_id)}:{safe_key(design_revision_id)}:"
-            f"{safe_key(artifact.artifact_revision_id)}"
+        **table_key_fields(
+            owner_id,
+            artifact_revision_row_key(
+                design_id,
+                design_revision_id,
+                artifact.artifact_revision_id,
+            ),
         ),
         "artifact_revision_id": artifact.artifact_revision_id,
         "artifact_type": artifact.artifact_type,
@@ -175,9 +200,7 @@ def create_artifact_revision(
         "blob_name": artifact.blob_name,
         "content_type": artifact.content_type,
         "checksum": artifact.checksum,
-        "created_at": now_iso(),
-        "created_by_thread_id": created_by_thread_id or "",
-        "created_by_run_id": created_by_run_id or "",
+        **lineage_fields(created_by_thread_id, created_by_run_id),
     }
     artifact_revisions_table.create_entity(entity)
     return entity
@@ -307,9 +330,19 @@ def source_blob_name(
     artifact_revision_id: str,
 ) -> str:
     return (
+        f"{design_revision_blob_prefix(owner_id, design_id, design_revision_id)}"
+        f"/source/{safe_key(artifact_revision_id)}.py"
+    )
+
+
+def design_revision_blob_prefix(
+    owner_id: str,
+    design_id: str,
+    design_revision_id: str,
+) -> str:
+    return (
         f"designs/{safe_key(owner_id)}/{safe_key(design_id)}"
         f"/revisions/{safe_key(design_revision_id)}"
-        f"/source/{safe_key(artifact_revision_id)}.py"
     )
 
 
@@ -321,8 +354,7 @@ def export_blob_name(
     extension: str,
 ) -> str:
     return (
-        f"designs/{safe_key(owner_id)}/{safe_key(design_id)}"
-        f"/revisions/{safe_key(design_revision_id)}"
+        f"{design_revision_blob_prefix(owner_id, design_id, design_revision_id)}"
         f"/exports/{safe_key(artifact_revision_id)}{extension}"
     )
 

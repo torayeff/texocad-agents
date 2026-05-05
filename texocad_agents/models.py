@@ -3,6 +3,8 @@ import os
 from dataclasses import dataclass
 
 from google.oauth2.service_account import Credentials as ServiceAccountCredentials
+from langchain.chat_models import init_chat_model
+from langchain_anthropic import ChatAnthropic
 
 
 @dataclass(frozen=True)
@@ -34,6 +36,28 @@ MODELS: dict[str, ModelConfig] = {
 }
 
 DEFAULT_MODEL = "gpt-5.5"
+
+
+def create_model(model_key: str):
+    if model_key not in MODELS:
+        raise ValueError(f"Unknown model key: {model_key}")
+
+    model_config = MODELS[model_key]
+    if model_config.provider == "azure_anthropic":
+        api_key = os.environ["ANTHROPIC_FOUNDRY_API_KEY"]
+        return ChatAnthropic(
+            model=model_config.name,
+            api_key=api_key,
+            base_url=os.environ["ANTHROPIC_FOUNDRY_BASE_URL"],
+            default_headers={"api-key": api_key},
+            **model_config.kwargs,
+        )
+
+    return init_chat_model(
+        model_config.name,
+        model_provider=model_config.provider,
+        **with_google_vertex_credentials(model_config.kwargs),
+    )
 
 
 def with_google_vertex_credentials(

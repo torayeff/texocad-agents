@@ -1,8 +1,7 @@
 import base64
 import mimetypes
 import re
-import tempfile
-from pathlib import Path, PurePosixPath
+from pathlib import PurePosixPath
 from xml.etree import ElementTree as ET
 
 import fitz
@@ -54,11 +53,8 @@ def read_attachment(attachment_path: str, runtime: ToolRuntime) -> Command | lis
     extension = PurePosixPath(filename).suffix.lower()
     mime_type, _ = mimetypes.guess_type(filename)
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        local_path = Path(tmpdir) / filename
-        blob_client = get_storage_container().get_blob_client(blob_name)
-        local_path.write_bytes(blob_client.download_blob().readall())
-        raw_bytes = local_path.read_bytes()
+    blob_client = get_storage_container().get_blob_client(blob_name)
+    raw_bytes = blob_client.download_blob().readall()
 
     if extension == ".svg":
         return _read_svg(filename, raw_bytes, runtime)
@@ -91,6 +87,7 @@ def _read_svg(filename: str, raw_bytes: bytes, runtime: ToolRuntime) -> Command:
 
 def _read_pdf(blob_name: str, raw_bytes: bytes) -> list:
     document = fitz.open(stream=raw_bytes, filetype="pdf")
+    n_pages = document.page_count
     blocks = []
     try:
         for index, page in enumerate(document, start=1):
@@ -100,7 +97,6 @@ def _read_pdf(blob_name: str, raw_bytes: bytes) -> list:
             blocks.append(create_image_block(base64=png_b64, mime_type="image/png"))
     finally:
         document.close()
-    n_pages = len(blocks) // 2
     blocks.insert(
         0,
         create_text_block(
