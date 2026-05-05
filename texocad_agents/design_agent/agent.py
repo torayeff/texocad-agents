@@ -18,5 +18,5 @@ async def create_design_agent(config: RunnableConfig) -> CompiledStateGraph:
         model=model,
         tools=[build_design, read_attachment, replace_file],
         system_prompt=SYSTEM_PROMPT,
-        name="design-agent",
+        name="TexoCAD",
     )
