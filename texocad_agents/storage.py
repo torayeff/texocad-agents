@@ -240,7 +240,7 @@ def revision_blob_name(
     filename: str,
 ) -> str:
     return (
-        f"designs/{safe_key(owner_id)}/{safe_key(design_id)}"
+        f"users/{user_scope_hash(owner_id)}/designs/{safe_key(design_id)}"
         f"/revisions/{revision_number}"
         f"/{safe_key(folder)}/{safe_key(filename)}"
     )
@@ -267,6 +267,10 @@ def lineage_fields(
 def safe_key(value: str) -> str:
     value = value.strip("/")
     return "".join("_" if char in "/\\#?\n\r\t" else char for char in value)
+
+
+def user_scope_hash(user_id: str) -> str:
+    return hashlib.sha256(user_id.encode("utf-8")).hexdigest()
 
 
 def odata_string(value: str) -> str:
