@@ -153,18 +153,15 @@ def build_design(
         source_blob,
         exports,
     )
-    summary = _tool_summary(
-        design_id=design_id,
-        design_revision=design_revision,
-        source_blob=source_blob,
-        exports=exports,
-        sandbox_output=result.output,
-    )
     return Command(
         update={
             "messages": [
                 ToolMessage(
-                    content=summary,
+                    content=(
+                        "Created design revision.\n"
+                        f"design_id: {design_id}\n"
+                        f"revision_number: {design_revision['revision_number']}"
+                    ),
                     tool_call_id=runtime.tool_call_id,
                     additional_kwargs={
                         "texocad_artifact": _revision_artifact_payload(
@@ -219,31 +216,6 @@ def _file_text(value: object) -> str | None:
     if isinstance(content, str):
         return content
     return None
-
-
-def _tool_summary(
-    *,
-    design_id: str,
-    design_revision: dict,
-    source_blob,
-    exports: list,
-    sandbox_output: str,
-) -> str:
-    lines = [
-        "Created design revision.",
-        f"design_id: {design_id}",
-        f"revision_number: {design_revision['revision_number']}",
-        f"source_blob_name: {source_blob.blob_name}",
-    ]
-    if exports:
-        lines.append("exports:")
-        lines.extend(f"- {export.filename}: {export.blob_name}" for export in exports)
-    else:
-        lines.append("exports: none")
-    if sandbox_output.strip():
-        lines.append("sandbox_output:")
-        lines.append(sandbox_output.strip()[:4000])
-    return "\n".join(lines)
 
 
 def _revision_artifact_payload(
