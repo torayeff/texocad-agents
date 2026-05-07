@@ -1,5 +1,6 @@
 {
   "python_version": "3.12",
+  "image_distro": "wolfi",
   "dependencies": [
     "."
   ],
@@ -7,7 +8,7 @@
     "texocad": "./texocad_agents/design_agent/agent.py:create_design_agent"
   },
   "dockerfile_lines": [
-    "RUN apt-get update && apt-get install -y --no-install-recommends libgl1 libxrender1 && rm -rf /var/lib/apt/lists/*"
+    "RUN apk add --no-cache libglvnd libxrender"
   ],
   "env": ".env",
   "auth": {
