@@ -2,9 +2,13 @@ import json
 import os
 from dataclasses import dataclass
 
+import httpx
 from google.oauth2.service_account import Credentials as ServiceAccountCredentials
 from langchain.chat_models import init_chat_model
 from langchain_anthropic import ChatAnthropic
+
+MODEL_TIMEOUT = httpx.Timeout(connect=30.0, read=1800.0, write=30.0, pool=30.0)
+MAX_RETRIES = 3
 
 
 @dataclass(frozen=True)
@@ -50,12 +54,16 @@ def create_model(model_key: str):
             api_key=api_key,
             base_url=os.environ["ANTHROPIC_FOUNDRY_BASE_URL"],
             default_headers={"api-key": api_key},
+            max_retries=MAX_RETRIES,
+            timeout=1800.0,
             **model_config.kwargs,
         )
 
     return init_chat_model(
         model_config.name,
         model_provider=model_config.provider,
+        max_retries=MAX_RETRIES,
+        timeout=MODEL_TIMEOUT,
         **with_google_vertex_credentials(model_config.kwargs),
     )
 
