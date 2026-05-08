@@ -36,11 +36,11 @@ MODELS: dict[str, ModelConfig] = {
             "effort": "max",
         },
     ),
-    "gemini-3.1-pro-preview": ModelConfig(
-        provider="google_genai",
-        name="gemini-3.1-pro-preview",
-        kwargs={"include_thoughts": True, "vertexai": True},
-    ),
+    # "gemini-3.1-pro-preview": ModelConfig(
+    #     provider="google_genai",
+    #     name="gemini-3.1-pro-preview",
+    #     kwargs={"include_thoughts": True, "vertexai": True},
+    # ),
 }
 
 DEFAULT_MODEL = "gpt-5.5"
