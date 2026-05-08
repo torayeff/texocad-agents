@@ -5,6 +5,7 @@ from pathlib import PurePosixPath
 from xml.etree import ElementTree as ET
 
 import fitz
+from deepagents.backends.utils import create_file_data
 from langchain_core.messages import ToolMessage
 from langchain_core.messages.content import create_image_block, create_text_block
 from langchain_core.tools import tool
@@ -100,7 +101,7 @@ def _read_svg(filename: str, raw_bytes: bytes, runtime: ToolRuntime) -> Command:
     file_path = f"/models/{PurePosixPath(filename).stem}.svg"
     return Command(
         update={
-            "files": {file_path: svg_text},
+            "files": {file_path: create_file_data(svg_text)},
             "messages": [
                 ToolMessage(
                     content=f"Saved SVG to {file_path}.\n{summary}",

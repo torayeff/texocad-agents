@@ -1,3 +1,4 @@
+from deepagents.backends.utils import create_file_data
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import tool
 from langgraph.prebuilt.tool_node import ToolRuntime
@@ -19,7 +20,7 @@ def replace_file(file_path: str, content: str, runtime: ToolRuntime) -> Command:
     resolved_path = file_path if file_path.startswith("/") else f"/{file_path}"
     return Command(
         update={
-            "files": {resolved_path: content},
+            "files": {resolved_path: create_file_data(content)},
             "messages": [
                 ToolMessage(
                     content=f"Replaced {resolved_path}",
