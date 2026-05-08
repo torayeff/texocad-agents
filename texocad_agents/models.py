@@ -22,7 +22,11 @@ MODELS: dict[str, ModelConfig] = {
     "gpt-5.5": ModelConfig(
         provider="openai",
         name="gpt-5.5",
-        kwargs={"reasoning": {"effort": "xhigh", "summary": "auto"}},
+        kwargs={
+            "reasoning": {"effort": "xhigh", "summary": "auto"},
+            "include": ["reasoning.encrypted_content"],
+            "store": False,
+        },
     ),
     "claude-opus-4-7": ModelConfig(
         provider="azure_anthropic",
