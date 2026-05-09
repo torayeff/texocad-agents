@@ -28,14 +28,14 @@ MODELS: dict[str, ModelConfig] = {
             "store": False,
         },
     ),
-    "claude-opus-4-7": ModelConfig(
-        provider="azure_anthropic",
-        name="claude-opus-4-7",
-        kwargs={
-            "thinking": {"type": "adaptive", "display": "summarized"},
-            "effort": "max",
-        },
-    ),
+    # "claude-opus-4-7": ModelConfig(
+    #     provider="azure_anthropic",
+    #     name="claude-opus-4-7",
+    #     kwargs={
+    #         "thinking": {"type": "adaptive", "display": "summarized"},
+    #         "effort": "max",
+    #     },
+    # ),
     # "gemini-3.1-pro-preview": ModelConfig(
     #     provider="google_genai",
     #     name="gemini-3.1-pro-preview",
