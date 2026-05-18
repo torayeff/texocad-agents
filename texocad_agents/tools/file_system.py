@@ -4,6 +4,8 @@ from langchain_core.tools import tool
 from langgraph.prebuilt.tool_node import ToolRuntime
 from langgraph.types import Command
 
+from texocad_agents.runtime_files import normalize_path
+
 
 @tool(parse_docstring=True)
 def replace_file(file_path: str, content: str, runtime: ToolRuntime) -> Command:
@@ -17,7 +19,7 @@ def replace_file(file_path: str, content: str, runtime: ToolRuntime) -> Command:
         content: Complete replacement file content.
     """
 
-    resolved_path = file_path if file_path.startswith("/") else f"/{file_path}"
+    resolved_path = normalize_path(file_path)
     return Command(
         update={
             "files": {resolved_path: create_file_data(content)},

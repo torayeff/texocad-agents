@@ -8,8 +8,8 @@ from texocad_agents.design_agent.prompt import SYSTEM_PROMPT
 from texocad_agents.models import DEFAULT_MODEL, create_model
 from texocad_agents.tools.build_design import build_design
 from texocad_agents.tools.file_system import replace_file
+from texocad_agents.tools.preview_design import preview_design
 from texocad_agents.tools.read_attachment import read_attachment
-from texocad_agents.tools.visual_verification import preview_design
 
 retry_middleware = ModelRetryMiddleware(
     max_retries=3,

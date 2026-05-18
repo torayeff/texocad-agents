@@ -1,14 +1,14 @@
 import base64
 import tempfile
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 from daytona import Daytona
 from langchain_core.messages.content import create_image_block, create_text_block
 from langchain_core.tools import tool
 from langgraph.prebuilt.tool_node import ToolRuntime
 
+from texocad_agents.runtime_files import read_runtime_file, support_files_for
 from texocad_agents.sandbox import SANDBOX_CONFIG, ensure_snapshot, run_code_preview
-from texocad_agents.tools.runtime_files import file_text, read_runtime_file
 
 
 @tool(parse_docstring=True)
@@ -48,7 +48,7 @@ def preview_design(
             view=view,
             camera=_vector_tuple(camera),
             up=_vector_tuple(up),
-            support_files=_support_files(file_path, runtime),
+            support_files=support_files_for(file_path, runtime),
         )
         if result.exit_code != 0 or result.image_path is None:
             return (
@@ -60,16 +60,7 @@ def preview_design(
         image_b64 = base64.b64encode(result.image_path.read_bytes()).decode("utf-8")
 
     return [
-        create_text_block(
-            text=(
-                f"Rendered deterministic {preview_label} preview "
-                "for visual verification.\n"
-                "Inspect the image against the user's request and any reference "
-                "attachments already read. Check major shape, proportions, missing "
-                "features, and visible reference mismatch. This is not dimensional "
-                "proof."
-            )
-        ),
+        create_text_block(text=f"Rendered deterministic {preview_label} preview."),
         create_image_block(base64=image_b64, mime_type="image/png"),
     ]
 
@@ -86,31 +77,3 @@ def _preview_label(view: str, camera: list[float] | None) -> str:
     if camera is not None:
         return "custom-camera"
     return view.lower()
-
-
-def _support_files(file_path: str, runtime: ToolRuntime) -> dict[str, bytes]:
-    files = runtime.state.get("files", {}) if isinstance(runtime.state, dict) else {}
-    script_path = PurePosixPath(
-        file_path if file_path.startswith("/") else f"/{file_path}"
-    )
-    support_files: dict[str, bytes] = {}
-
-    if not isinstance(files, dict):
-        return support_files
-
-    for candidate_path, value in files.items():
-        normalized_path = (
-            candidate_path
-            if str(candidate_path).startswith("/")
-            else f"/{candidate_path}"
-        )
-        attachment_path = PurePosixPath(str(normalized_path))
-        if (
-            attachment_path.parent == script_path.parent
-            and attachment_path.suffix.lower() == ".svg"
-        ):
-            content = file_text(value)
-            if content is not None:
-                support_files[attachment_path.name] = content.encode("utf-8")
-
-    return support_files

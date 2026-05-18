@@ -48,13 +48,15 @@ def read_attachment(attachment_path: str, runtime: ToolRuntime) -> Command | lis
     user_id = auth_user.get("identity")
 
     blob_name = blob_path_from_url(attachment_path)
-    allowed_prefixes: tuple[str, ...] = ()
+    allowed_prefixes: tuple[str, ...]
     if user_id:
         user_scope = f"users/{user_scope_hash(user_id)}"
-        allowed_prefixes += (
+        allowed_prefixes = (
             f"{user_scope}/threads/{thread_id}/",
             f"{user_scope}/uploads/",
         )
+    else:
+        allowed_prefixes = ()
 
     if not blob_name.startswith(allowed_prefixes):
         return (
@@ -64,8 +66,9 @@ def read_attachment(attachment_path: str, runtime: ToolRuntime) -> Command | lis
             + (" or 'users/<hash>/uploads/...'." if user_id else ".")
         )
 
-    filename = PurePosixPath(blob_name).name
-    extension = PurePosixPath(filename).suffix.lower()
+    attachment = PurePosixPath(blob_name)
+    filename = attachment.name
+    extension = attachment.suffix.lower()
     mime_type, _ = mimetypes.guess_type(filename)
 
     blob_client = get_storage_container().get_blob_client(blob_name)

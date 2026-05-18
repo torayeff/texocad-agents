@@ -1,6 +1,6 @@
 import tempfile
 from dataclasses import asdict
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 from daytona import Daytona
 from langchain_core.messages import ToolMessage
@@ -8,6 +8,7 @@ from langchain_core.tools import tool
 from langgraph.prebuilt.tool_node import ToolRuntime
 from langgraph.types import Command
 
+from texocad_agents.runtime_files import read_runtime_file, support_files_for
 from texocad_agents.sandbox import SANDBOX_CONFIG, ensure_snapshot, run_code
 from texocad_agents.storage import (
     create_design_revision,
@@ -18,9 +19,6 @@ from texocad_agents.storage import (
     upload_export_blob,
     upload_source_blob,
 )
-from texocad_agents.tools.runtime_files import file_text, read_runtime_file
-
-EXPORT_EXTENSION = ".step"
 
 
 @tool(parse_docstring=True)
@@ -60,27 +58,6 @@ def build_design(
     design_id = thread_id
     run_id = configurable.get("run_id") or metadata.get("run_id")
 
-    files = runtime.state.get("files", {}) if isinstance(runtime.state, dict) else {}
-    script_path = PurePosixPath(
-        file_path if file_path.startswith("/") else f"/{file_path}"
-    )
-    support_files: dict[str, bytes] = {}
-    if isinstance(files, dict):
-        for candidate_path, value in files.items():
-            normalized_path = (
-                candidate_path
-                if str(candidate_path).startswith("/")
-                else f"/{candidate_path}"
-            )
-            attachment_path = PurePosixPath(str(normalized_path))
-            if (
-                attachment_path.parent == script_path.parent
-                and attachment_path.suffix.lower() == ".svg"
-            ):
-                content = file_text(value)
-                if content is not None:
-                    support_files[attachment_path.name] = content.encode("utf-8")
-
     daytona = Daytona()
     ensure_snapshot(daytona, SANDBOX_CONFIG)
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -89,7 +66,7 @@ def build_design(
             code,
             Path(tmpdir),
             SANDBOX_CONFIG,
-            support_files=support_files,
+            support_files=support_files_for(file_path, runtime),
         )
 
         if result.exit_code != 0:
@@ -101,23 +78,13 @@ def build_design(
                 f"output:\n{result.output.strip()}"
             )
 
-        export_error = _validate_step_exports(result.model_paths)
-        if export_error:
-            return (
-                "Sandbox execution failed.\n"
-                f"design_id: {design_id}\n"
-                "revision_created: false\n"
-                "exit_code: 1\n"
-                f"output:\n{export_error}"
-            )
-
         tables = get_design_tables()
         storage_container = get_storage_container()
         ensure_design(
             tables.designs,
             owner_id,
             design_id,
-            title=metadata.get("title") or PurePosixPath(file_path).stem,
+            title=metadata.get("title") or Path(file_path).stem,
             created_by_thread_id=thread_id,
             created_by_run_id=run_id,
         )
@@ -134,19 +101,19 @@ def build_design(
             owner_id,
             design_id,
             revision_number,
-            PurePosixPath(file_path).name,
+            Path(file_path).name,
             code,
         )
-        exports = []
-        for model_path in result.model_paths:
-            export_blob = upload_export_blob(
+        exports = [
+            upload_export_blob(
                 storage_container,
                 owner_id,
                 design_id,
                 revision_number,
                 model_path,
             )
-            exports.append(export_blob)
+            for model_path in result.model_paths
+        ]
 
     design_revision = save_design_revision_blobs(
         tables.design_revisions,
@@ -178,17 +145,6 @@ def build_design(
             ]
         }
     )
-
-
-def _validate_step_exports(model_paths: tuple[Path, ...]) -> str | None:
-    if len(model_paths) != 1:
-        return f"Expected exactly one STEP export, found {len(model_paths)}."
-
-    model_path = model_paths[0]
-    if model_path.suffix.lower() != EXPORT_EXTENSION:
-        return f"Expected a .step export, found {model_path.name!r}."
-
-    return None
 
 
 def _revision_artifact_payload(
