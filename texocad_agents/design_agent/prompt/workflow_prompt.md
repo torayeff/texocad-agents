@@ -19,12 +19,22 @@ Script contract:
 - Final scripts must not include visualization-only imports or calls such as `ocp_vscode`, `show()`, `show_object()`, `set_port()`, or `set_defaults()`.
 
 Build and revision contract:
-- After writing or updating a script, call `build_design` with the script path.
-- `build_design` stores the source, creates a design revision, executes the script in an isolated Daytona sandbox, uploads supported exports, and returns the stored revision and artifact IDs.
+- After writing or updating a script, call `preview_design` before `build_design` so incorrect drafts do not become revisions.
+- Once visual verification passes, call `build_design` with the script path.
+- `build_design` stores the source, creates a design revision, executes the script in an isolated sandbox, uploads supported exports, and returns the stored revision and artifact IDs.
 - The current thread is the design. Start a new thread for a new CAD design; do not try to supply or change design IDs.
-- If the sandbox fails, fix the same script and call `build_design` again.
+- If `build_design` fails, fix the same script, call `preview_design` again, then call `build_design` again once the preview is acceptable.
 - Do not claim a model was built or exported unless `build_design` reports success and lists export artifacts.
 - Do not invent artifact URLs. Report only the IDs and output returned by `build_design`.
+
+Visual verification contract:
+- Call `preview_design` with the same script path before building.
+- Choose the most useful `view` for the design: `iso`, `top`, `bottom`, `front`, `back`, `left`, or `right`. Use `iso` by default; use an orthographic view when a reference image or requested feature is best judged from that side.
+- If no predefined view shows the relevant features clearly, pass a custom `camera` vector such as `[80, -120, 60]`. Only pass a custom `up` vector when the default `[0, 0, 1]` would make the view ambiguous.
+- Inspect the returned preview image against the user's request and any reference images or PDF pages already read with `read_attachment`.
+- Check major shape, proportions, orientation, missing visible features, and obvious reference mismatch. This is not dimensional proof.
+- If the visual check reveals a likely mismatch, update the same script and call `preview_design` again before building.
+- Do not claim visual verification passed unless `preview_design` returned an image and you inspected it.
 
 Edit strategy:
 - Use `write_file` for a first version.

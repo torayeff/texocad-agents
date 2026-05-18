@@ -18,6 +18,7 @@ from texocad_agents.storage import (
     upload_export_blob,
     upload_source_blob,
 )
+from texocad_agents.tools.runtime_files import file_text, read_runtime_file
 
 EXPORT_EXTENSION = ".step"
 
@@ -39,7 +40,7 @@ def build_design(
         file_path: Path to the CAD Python file in the agent filesystem.
     """
 
-    code = _read_runtime_file(file_path, runtime)
+    code = read_runtime_file(file_path, runtime)
     if code is None:
         return f"Could not find {file_path!r} in the agent filesystem."
 
@@ -76,7 +77,7 @@ def build_design(
                 attachment_path.parent == script_path.parent
                 and attachment_path.suffix.lower() == ".svg"
             ):
-                content = _file_text(value)
+                content = file_text(value)
                 if content is not None:
                     support_files[attachment_path.name] = content.encode("utf-8")
 
@@ -179,18 +180,6 @@ def build_design(
     )
 
 
-def _read_runtime_file(file_path: str, runtime: ToolRuntime) -> str | None:
-    files = runtime.state.get("files", {}) if isinstance(runtime.state, dict) else {}
-    candidates = [file_path]
-    if not file_path.startswith("/"):
-        candidates.append(f"/{file_path}")
-
-    for candidate in candidates:
-        if candidate in files:
-            return _file_text(files[candidate])
-    return None
-
-
 def _validate_step_exports(model_paths: tuple[Path, ...]) -> str | None:
     if len(model_paths) != 1:
         return f"Expected exactly one STEP export, found {len(model_paths)}."
@@ -199,22 +188,6 @@ def _validate_step_exports(model_paths: tuple[Path, ...]) -> str | None:
     if model_path.suffix.lower() != EXPORT_EXTENSION:
         return f"Expected a .step export, found {model_path.name!r}."
 
-    return None
-
-
-def _file_text(value: object) -> str | None:
-    if isinstance(value, str):
-        return value
-    if isinstance(value, bytes):
-        return value.decode("utf-8")
-    if isinstance(value, dict):
-        for key in ("content", "text", "data"):
-            content = value.get(key)
-            if isinstance(content, str):
-                return content
-    content = getattr(value, "content", None)
-    if isinstance(content, str):
-        return content
     return None
 
 
