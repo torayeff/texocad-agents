@@ -8,7 +8,6 @@ from langchain_core.tools import tool
 from langgraph.prebuilt.tool_node import ToolRuntime
 from langgraph.types import Command
 
-from texocad_agents.runtime_files import read_runtime_file, support_files_for
 from texocad_agents.sandbox import run_python
 from texocad_agents.storage import (
     create_design_revision,
@@ -23,6 +22,11 @@ from texocad_agents.tools.preview_design import (
     preview_command,
     save_preview,
 )
+from texocad_agents.tools.tool_runtime import (
+    error_tool_message,
+    read_runtime_file,
+    support_files_for,
+)
 
 MODEL_EXTENSION = ".step"
 MAX_MODEL_FILES = 1
@@ -33,7 +37,7 @@ MAX_MODEL_BYTES = 100 * 1024 * 1024
 def build_design(
     file_path: str,
     runtime: ToolRuntime,
-) -> Command | str:
+) -> Command:
     """Build CAD code and store a design revision with exported model files.
 
     Use this after writing or editing a CAD Python file in the agent filesystem.
@@ -48,7 +52,10 @@ def build_design(
 
     code = read_runtime_file(file_path, runtime)
     if code is None:
-        return f"Could not find {file_path!r} in the agent filesystem."
+        return error_tool_message(
+            runtime,
+            f"Could not find {file_path!r} in the agent filesystem.",
+        )
 
     configurable = runtime.config.get("configurable", {})
     metadata = runtime.config.get("metadata", {})
@@ -56,11 +63,17 @@ def build_design(
 
     owner_id = auth_user.get("identity")
     if not owner_id:
-        return "Refused: cannot create design artifacts without an authenticated owner."
+        return error_tool_message(
+            runtime,
+            "Refused: cannot create design artifacts without an authenticated owner.",
+        )
 
     raw_thread_id = configurable.get("thread_id")
     if not raw_thread_id:
-        return "Refused: cannot create design artifacts without a LangGraph thread_id."
+        return error_tool_message(
+            runtime,
+            "Refused: cannot create design artifacts without a LangGraph thread_id.",
+        )
 
     thread_id = str(raw_thread_id)
     design_id = thread_id
@@ -75,7 +88,8 @@ def build_design(
         )
 
         if result.exit_code != 0:
-            return _sandbox_failure(
+            return _sandbox_failure_command(
+                runtime,
                 design_id=design_id,
                 exit_code=result.exit_code,
                 output=result.output,
@@ -83,7 +97,8 @@ def build_design(
 
         step_files_or_error = _validated_step_files(result.files)
         if isinstance(step_files_or_error, str):
-            return _sandbox_failure(
+            return _sandbox_failure_command(
+                runtime,
                 design_id=design_id,
                 exit_code=1,
                 output=step_files_or_error,
@@ -236,13 +251,20 @@ def _preview_file(files: tuple[Path, ...]) -> Path | None:
     return preview_files[0]
 
 
-def _sandbox_failure(*, design_id: str, exit_code: int, output: str) -> str:
-    return (
+def _sandbox_failure_command(
+    runtime: ToolRuntime,
+    *,
+    design_id: str,
+    exit_code: int,
+    output: str,
+) -> Command:
+    return error_tool_message(
+        runtime,
         "Sandbox execution failed.\n"
         f"design_id: {design_id}\n"
         "revision_created: false\n"
         f"exit_code: {exit_code}\n"
-        f"output:\n{output.strip()}"
+        f"output:\n{output.strip()}",
     )
 
 

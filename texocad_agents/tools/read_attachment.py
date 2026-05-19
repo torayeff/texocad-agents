@@ -17,6 +17,7 @@ from texocad_agents.storage import (
     get_storage_container,
     user_scope_hash,
 )
+from texocad_agents.tools.tool_runtime import error_tool_message
 
 SUPPORTED_IMAGE_TYPES = {
     ".png": "image/png",
@@ -59,11 +60,14 @@ def read_attachment(attachment_path: str, runtime: ToolRuntime) -> Command | lis
         allowed_prefixes = ()
 
     if not blob_name.startswith(allowed_prefixes):
-        return (
-            "Refused: blob path is outside this thread/user scope. "
-            "Attachments must live under "
-            f"'users/<hash>/threads/{thread_id}/...'"
-            + (" or 'users/<hash>/uploads/...'." if user_id else ".")
+        return error_tool_message(
+            runtime,
+            (
+                "Refused: blob path is outside this thread/user scope. "
+                "Attachments must live under "
+                f"'users/<hash>/threads/{thread_id}/...'"
+                + (" or 'users/<hash>/uploads/...'." if user_id else ".")
+            ),
         )
 
     attachment = PurePosixPath(blob_name)
@@ -75,7 +79,7 @@ def read_attachment(attachment_path: str, runtime: ToolRuntime) -> Command | lis
     blob_size = blob_client.get_blob_properties().size
     size_error = _validate_attachment_size(blob_name, extension, mime_type, blob_size)
     if size_error:
-        return size_error
+        return error_tool_message(runtime, size_error)
 
     raw_bytes = blob_client.download_blob().readall()
 
@@ -83,16 +87,23 @@ def read_attachment(attachment_path: str, runtime: ToolRuntime) -> Command | lis
         return _read_svg(filename, raw_bytes, runtime)
 
     if mime_type == "application/pdf":
-        return _read_pdf(blob_name, raw_bytes)
+        pdf_result = _read_pdf(blob_name, raw_bytes)
+        if isinstance(pdf_result, str):
+            return error_tool_message(runtime, pdf_result)
+        return pdf_result
 
     if mime_type and mime_type.startswith("image/"):
-        return _read_image(blob_name, extension, raw_bytes)
+        image_result = _read_image(blob_name, extension, raw_bytes)
+        if isinstance(image_result, str):
+            return error_tool_message(runtime, image_result)
+        return image_result
 
     try:
         text = raw_bytes.decode("utf-8")
     except UnicodeDecodeError:
-        return (
-            f"Unsupported text encoding for '{blob_name}'. Attachments must be UTF-8."
+        return error_tool_message(
+            runtime,
+            f"Unsupported text encoding for '{blob_name}'. Attachments must be UTF-8.",
         )
 
     return f"Read '{blob_name}':\n\n{text}"

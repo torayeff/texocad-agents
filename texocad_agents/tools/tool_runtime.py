@@ -1,6 +1,8 @@
 from pathlib import PurePosixPath
 
+from langchain_core.messages import ToolMessage
 from langgraph.prebuilt.tool_node import ToolRuntime
+from langgraph.types import Command
 
 
 def normalize_path(file_path: str) -> str:
@@ -60,3 +62,17 @@ def file_text(value: object) -> str | None:
     if isinstance(content, str):
         return content
     return None
+
+
+def error_tool_message(runtime: ToolRuntime, content: str) -> Command:
+    return Command(
+        update={
+            "messages": [
+                ToolMessage(
+                    content=content,
+                    tool_call_id=runtime.tool_call_id,
+                    status="error",
+                )
+            ]
+        }
+    )

@@ -4,7 +4,7 @@ from langchain_core.tools import tool
 from langgraph.prebuilt.tool_node import ToolRuntime
 from langgraph.types import Command
 
-from texocad_agents.runtime_files import normalize_path
+from texocad_agents.tools.tool_runtime import normalize_path
 
 
 @tool(parse_docstring=True)

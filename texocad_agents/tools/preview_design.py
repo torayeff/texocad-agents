@@ -7,6 +7,7 @@ from azure.core.exceptions import ResourceNotFoundError
 from langchain_core.messages.content import create_image_block, create_text_block
 from langchain_core.tools import tool
 from langgraph.prebuilt.tool_node import ToolRuntime
+from langgraph.types import Command
 
 from texocad_agents.sandbox import SandboxCommand, run_python
 from texocad_agents.storage import (
@@ -17,6 +18,7 @@ from texocad_agents.storage import (
     save_design_preview,
     upload_preview_blob,
 )
+from texocad_agents.tools.tool_runtime import error_tool_message
 
 MODEL_EXTENSION = ".step"
 MAX_MODEL_FILES = 1
@@ -38,7 +40,7 @@ def preview_design(
     view: str = "iso",
     camera: list[float] | None = None,
     up: list[float] | None = None,
-) -> list | str:
+) -> Command | list:
     """Render and store an additional preview for a built design revision.
 
     Use this after build_design when the default iso preview does not show an
@@ -54,11 +56,14 @@ def preview_design(
     """
     ctx = _context(runtime)
     if isinstance(ctx, str):
-        return ctx
+        return error_tool_message(runtime, ctx)
     owner_id, design_id, thread_id, run_id = ctx
 
-    cam = _vector(camera)
-    up_vec = _vector(up)
+    try:
+        cam = _vector(camera)
+        up_vec = _vector(up)
+    except ValueError as exc:
+        return error_tool_message(runtime, str(exc))
     view_name = _view_name(view, cam)
 
     tables = get_design_tables()
@@ -70,15 +75,18 @@ def preview_design(
             int(revision_number),
         )
     except ResourceNotFoundError:
-        return (
-            "Could not find design revision.\n"
-            f"design_id: {design_id}\n"
-            f"revision_number: {revision_number}"
+        return error_tool_message(
+            runtime,
+            (
+                "Could not find design revision.\n"
+                f"design_id: {design_id}\n"
+                f"revision_number: {revision_number}"
+            ),
         )
 
     export = _step_export(revision)
     if isinstance(export, str):
-        return export
+        return error_tool_message(runtime, export)
 
     container = get_storage_container()
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -93,7 +101,7 @@ def preview_design(
             up=up_vec,
         )
         if isinstance(image_path_or_error, str):
-            return image_path_or_error
+            return error_tool_message(runtime, image_path_or_error)
         image_path = image_path_or_error
 
         preview = save_preview(
@@ -110,6 +118,16 @@ def preview_design(
             thread_id=thread_id,
             run_id=run_id,
         )
+        if preview.get("error"):
+            return error_tool_message(
+                runtime,
+                (
+                    "Could not save design preview.\n"
+                    f"design_id: {design_id}\n"
+                    f"revision_number: {revision_number}\n"
+                    f"output:\n{preview['error']}"
+                ),
+            )
 
     return [
         create_text_block(
