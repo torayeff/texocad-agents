@@ -21,7 +21,6 @@ from texocad_agents.storage import (
 )
 from texocad_agents.tools.preview_design import (
     preview_command,
-    preview_status,
     save_preview,
 )
 
@@ -150,13 +149,16 @@ def build_design(
         source_blob,
         exports,
     )
+    preview_error = (
+        f"\npreview_failed: {preview['error']}" if preview.get("error") else ""
+    )
     content_blocks = [
         create_text_block(
             text=(
                 "Created design revision.\n"
                 f"design_id: {design_id}\n"
                 f"revision_number: {design_revision['revision_number']}"
-                f"{preview_status(preview)}"
+                f"{preview_error}"
             )
         )
     ]

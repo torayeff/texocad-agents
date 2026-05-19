@@ -169,14 +169,6 @@ def save_preview(
         return {"blobs": [], "image": None, "error": str(exc)}
 
 
-def preview_status(preview: dict) -> str:
-    if preview["blobs"]:
-        return "\npreview: stored"
-    if preview["error"]:
-        return f"\npreview_failed: {preview['error']}"
-    return ""
-
-
 def render_step(
     step_bytes: bytes,
     step_filename: str,
