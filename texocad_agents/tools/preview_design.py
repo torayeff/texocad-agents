@@ -116,8 +116,7 @@ def preview_design(
             text=(
                 f"Rendered and stored {view_name} preview.\n"
                 f"design_id: {design_id}\n"
-                f"revision_number: {revision_number}\n"
-                f"preview_blob: {preview['blobs'][0].blob_name}"
+                f"revision_number: {revision_number}"
             )
         ),
         create_image_block(base64=preview["image"], mime_type="image/png"),
@@ -172,7 +171,7 @@ def save_preview(
 
 def preview_status(preview: dict) -> str:
     if preview["blobs"]:
-        return f"\npreview_blob: {preview['blobs'][0].blob_name}"
+        return "\npreview: stored"
     if preview["error"]:
         return f"\npreview_failed: {preview['error']}"
     return ""
