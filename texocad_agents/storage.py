@@ -12,8 +12,10 @@ from azure.storage.blob import BlobServiceClient, ContentSettings
 
 DESIGNS_TABLE_NAME = "texocaddesigns"
 DESIGN_REVISIONS_TABLE_NAME = "texocaddesignrevisions"
+DESIGN_PREVIEWS_TABLE_NAME = "texocaddesignpreviews"
 
 SOURCE_CONTENT_TYPE = "text/x-python; charset=utf-8"
+PREVIEW_CONTENT_TYPE = "image/png"
 MODEL_CONTENT_TYPES = {
     ".glb": "model/gltf-binary",
     ".gltf": "model/gltf+json",
@@ -27,6 +29,7 @@ MODEL_CONTENT_TYPES = {
 class DesignTables:
     designs: object
     design_revisions: object
+    design_previews: object
 
 
 @dataclass(frozen=True)
@@ -52,6 +55,7 @@ def get_design_tables() -> DesignTables:
         design_revisions=service.create_table_if_not_exists(
             DESIGN_REVISIONS_TABLE_NAME
         ),
+        design_previews=service.create_table_if_not_exists(DESIGN_PREVIEWS_TABLE_NAME),
     )
 
 
@@ -93,6 +97,18 @@ def list_design_revisions(design_revisions_table, owner_id: str, design_id: str)
     return sorted(revisions, key=lambda revision: revision["revision_number"])
 
 
+def get_design_revision(
+    design_revisions_table,
+    owner_id: str,
+    design_id: str,
+    revision_number: int,
+):
+    return design_revisions_table.get_entity(
+        partition_key=safe_key(owner_id),
+        row_key=revision_row_key(design_id, revision_number),
+    )
+
+
 def next_design_revision_number(
     design_revisions_table,
     owner_id: str,
@@ -119,7 +135,7 @@ def create_design_revision(
         entity = {
             **azure_table_keys(
                 owner_id,
-                f"{safe_key(design_id)}:{revision_number}",
+                revision_row_key(design_id, revision_number),
             ),
             "design_id": design_id,
             "owner_id": owner_id,
@@ -220,6 +236,78 @@ def upload_export_blob(
     )
 
 
+def upload_preview_blob(
+    storage_container,
+    owner_id: str,
+    design_id: str,
+    revision_number: int,
+    preview_path: Path,
+    view: str,
+) -> StoredBlob:
+    filename = f"{safe_key(view)}.png"
+    blob_name = revision_blob_name(
+        owner_id,
+        design_id,
+        revision_number,
+        "previews",
+        filename,
+    )
+    content_settings = ContentSettings(
+        content_type=PREVIEW_CONTENT_TYPE,
+        content_disposition=f'inline; filename="{filename}"',
+    )
+
+    with preview_path.open("rb") as preview_file:
+        storage_container.get_blob_client(blob_name).upload_blob(
+            preview_file,
+            overwrite=True,
+            content_settings=content_settings,
+        )
+
+    return StoredBlob(
+        filename=filename,
+        blob_name=blob_name,
+        content_type=PREVIEW_CONTENT_TYPE,
+        checksum=sha256_file(preview_path),
+    )
+
+
+def save_design_preview(
+    design_previews_table,
+    owner_id: str,
+    design_id: str,
+    revision_number: int,
+    view: str,
+    preview: StoredBlob,
+    *,
+    source_export_checksum: str,
+    camera: tuple[float, float, float] | None,
+    up: tuple[float, float, float] | None,
+    created_by_thread_id: str | None,
+    created_by_run_id: str | None,
+):
+    entity = {
+        **azure_table_keys(
+            owner_id,
+            preview_row_key(design_id, revision_number, view),
+        ),
+        "design_id": design_id,
+        "owner_id": owner_id,
+        "revision_number": revision_number,
+        "view": view,
+        "camera_json": json.dumps(camera) if camera else "",
+        "up_json": json.dumps(up) if up else "",
+        "filename": preview.filename,
+        "blob_name": preview.blob_name,
+        "content_type": preview.content_type,
+        "checksum": preview.checksum,
+        "source_export_checksum": source_export_checksum,
+        **lineage_fields(created_by_thread_id, created_by_run_id),
+    }
+    design_previews_table.upsert_entity(entity)
+    return entity
+
+
 def blob_path_from_url(value: str, container_name: str | None = None) -> str:
     parsed = urlparse(value)
     if not parsed.scheme:
@@ -244,6 +332,14 @@ def revision_blob_name(
         f"/revisions/{revision_number}"
         f"/{safe_key(folder)}/{safe_key(filename)}"
     )
+
+
+def revision_row_key(design_id: str, revision_number: int) -> str:
+    return f"{safe_key(design_id)}:{revision_number}"
+
+
+def preview_row_key(design_id: str, revision_number: int, view: str) -> str:
+    return f"{revision_row_key(design_id, revision_number)}:{safe_key(view)}"
 
 
 def azure_table_keys(owner_id: str, row_key: str) -> dict[str, str]:

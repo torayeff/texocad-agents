@@ -27,7 +27,7 @@ async def create_design_agent(config: RunnableConfig) -> CompiledStateGraph:
 
     return create_deep_agent(
         model=model,
-        tools=[read_attachment, replace_file, preview_design, build_design],
+        tools=[read_attachment, replace_file, build_design, preview_design],
         system_prompt=SYSTEM_PROMPT,
         name="TexoCAD",
         middleware=[retry_middleware],

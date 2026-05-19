@@ -17,9 +17,9 @@ MAX_PROCESS_OUTPUT_CHARS = 20_000
 
 @dataclass(frozen=True)
 class SandboxConfig:
-    snapshot_name: str = "texocad-build123d"
+    snapshot_name: str = "texocad-build123d-v2"
     python_version: str = "3.12"
-    pip_packages: tuple[str, ...] = ("build123d", "bd_warehouse")
+    pip_packages: tuple[str, ...] = ("build123d", "bd_warehouse", "pymupdf")
     apt_packages: tuple[str, ...] = ("libgl1", "libxrender1")
     cpu: int = 4
     memory: int = 8
@@ -37,6 +37,13 @@ class SandboxRunResult:
     exit_code: int
     output: str
     files: tuple[Path, ...] = ()
+
+
+@dataclass(frozen=True)
+class SandboxCommand:
+    filename: str
+    contents: bytes
+    command: str
 
 
 def ensure_snapshot(daytona: Daytona, config: SandboxConfig = SANDBOX_CONFIG) -> None:
@@ -79,6 +86,7 @@ def run_python(
     config: SandboxConfig = SANDBOX_CONFIG,
     *,
     support_files: dict[str, bytes] | None = None,
+    post_run: SandboxCommand | None = None,
 ) -> SandboxRunResult:
     daytona = Daytona()
     ensure_snapshot(daytona, config)
@@ -127,6 +135,24 @@ def run_python(
                 exit_code=response.exit_code,
                 output=output,
             )
+
+        if post_run is not None:
+            sandbox.fs.upload_file(
+                post_run.contents,
+                posixpath.join(work_dir, posixpath.basename(post_run.filename)),
+            )
+            response = sandbox.process.exec(
+                post_run.command,
+                cwd=work_dir,
+                env={"TEXOCAD_OUTPUT_DIR": remote_output_dir},
+                timeout=config.exec_timeout,
+            )
+            output = _append_output(output, response.result or "")
+            if response.exit_code != 0:
+                return SandboxRunResult(
+                    exit_code=response.exit_code,
+                    output=output,
+                )
 
         remote_output_files = sorted(
             (
@@ -189,3 +215,10 @@ def _wait_for_active_snapshot(
 
         time.sleep(config.snapshot_poll_interval)
         snapshot = daytona.snapshot.get(config.snapshot_name)
+
+
+def _append_output(output: str, extra: str) -> str:
+    raw_output = f"{output}\n{extra}" if output and extra else output or extra
+    if len(raw_output) <= MAX_PROCESS_OUTPUT_CHARS:
+        return raw_output
+    return raw_output[:MAX_PROCESS_OUTPUT_CHARS] + "\n...[sandbox output truncated]..."

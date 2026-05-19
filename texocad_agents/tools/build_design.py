@@ -3,6 +3,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from langchain_core.messages import ToolMessage
+from langchain_core.messages.content import create_image_block, create_text_block
 from langchain_core.tools import tool
 from langgraph.prebuilt.tool_node import ToolRuntime
 from langgraph.types import Command
@@ -17,6 +18,11 @@ from texocad_agents.storage import (
     save_design_revision_blobs,
     upload_export_blob,
     upload_source_blob,
+)
+from texocad_agents.tools.preview_design import (
+    preview_command,
+    preview_status,
+    save_preview,
 )
 
 MODEL_EXTENSION = ".step"
@@ -66,6 +72,7 @@ def build_design(
             code,
             Path(tmpdir),
             support_files=support_files_for(file_path, runtime),
+            post_run=preview_command(),
         )
 
         if result.exit_code != 0:
@@ -83,6 +90,7 @@ def build_design(
                 output=step_files_or_error,
             )
         step_files = step_files_or_error
+        preview_file = _preview_file(result.files)
 
         tables = get_design_tables()
         storage_container = get_storage_container()
@@ -121,21 +129,50 @@ def build_design(
             for step_file in step_files
         ]
 
+        preview = save_preview(
+            tables.design_previews,
+            storage_container,
+            owner_id=owner_id,
+            design_id=design_id,
+            revision_number=revision_number,
+            image_path=preview_file,
+            view="iso",
+            source_export_checksum=exports[0].checksum,
+            camera=None,
+            up=None,
+            thread_id=thread_id,
+            run_id=run_id,
+        )
+
     design_revision = save_design_revision_blobs(
         tables.design_revisions,
         design_revision,
         source_blob,
         exports,
     )
+    content_blocks = [
+        create_text_block(
+            text=(
+                "Created design revision.\n"
+                f"design_id: {design_id}\n"
+                f"revision_number: {design_revision['revision_number']}"
+                f"{preview_status(preview)}"
+            )
+        )
+    ]
+    if preview.get("image"):
+        content_blocks.append(
+            create_image_block(
+                base64=preview["image"],
+                mime_type="image/png",
+            )
+        )
+
     return Command(
         update={
             "messages": [
                 ToolMessage(
-                    content=(
-                        "Created design revision.\n"
-                        f"design_id: {design_id}\n"
-                        f"revision_number: {design_revision['revision_number']}"
-                    ),
+                    content=content_blocks,
                     tool_call_id=runtime.tool_call_id,
                     additional_kwargs={
                         "texocad_artifact": _revision_artifact_payload(
@@ -143,6 +180,7 @@ def build_design(
                             design_revision=design_revision,
                             source_blob=source_blob,
                             exports=exports,
+                            previews=preview["blobs"],
                             thread_id=thread_id,
                             run_id=run_id,
                         )
@@ -159,7 +197,7 @@ def _validated_step_files(
     unsupported_files = [
         file_path.name
         for file_path in files
-        if file_path.suffix.lower() != MODEL_EXTENSION
+        if file_path.suffix.lower() not in {MODEL_EXTENSION, ".png"}
     ]
     if unsupported_files:
         return (
@@ -187,6 +225,15 @@ def _validated_step_files(
     return step_files
 
 
+def _preview_file(files: tuple[Path, ...]) -> Path | None:
+    preview_files = tuple(
+        file_path for file_path in files if file_path.suffix.lower() == ".png"
+    )
+    if len(preview_files) != 1:
+        return None
+    return preview_files[0]
+
+
 def _sandbox_failure(*, design_id: str, exit_code: int, output: str) -> str:
     return (
         "Sandbox execution failed.\n"
@@ -203,6 +250,7 @@ def _revision_artifact_payload(
     design_revision: dict,
     source_blob,
     exports: list,
+    previews: list,
     thread_id: str,
     run_id: str | None,
 ) -> dict:
@@ -212,6 +260,7 @@ def _revision_artifact_payload(
         "revisionNumber": int(design_revision["revision_number"]),
         "source": _stored_blob_payload(source_blob),
         "exports": [_stored_blob_payload(export) for export in exports],
+        "previews": [_stored_blob_payload(preview) for preview in previews],
         "createdByThreadId": thread_id,
     }
     if run_id:
