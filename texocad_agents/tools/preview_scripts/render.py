@@ -6,13 +6,19 @@ from pathlib import Path
 from typing import Sequence
 
 import numpy as np
-from build123d.importers import import_step
 from OCP.BRep import BRep_Tool
 from OCP.BRepMesh import BRepMesh_IncrementalMesh
-from OCP.TopAbs import TopAbs_FACE, TopAbs_REVERSED
+from OCP.Quantity import Quantity_Color
+from OCP.STEPCAFControl import STEPCAFControl_Reader
+from OCP.TCollection import TCollection_ExtendedString
+from OCP.TDF import TDF_LabelSequence
+from OCP.TDocStd import TDocStd_Document
+from OCP.TopAbs import TopAbs_FACE, TopAbs_REVERSED, TopAbs_SOLID
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS
+from OCP.XCAFApp import XCAFApp_Application
+from OCP.XCAFDoc import XCAFDoc_ColorGen, XCAFDoc_ColorSurf, XCAFDoc_DocumentTool
 from PIL import Image, ImageDraw
 
 EPS = 1e-5
@@ -107,26 +113,25 @@ def normalize(vector: np.ndarray) -> np.ndarray:
     return vector / length
 
 
-def shape_color(shape: object, fallback: np.ndarray) -> np.ndarray:
-    color = getattr(shape, "color", None)
-    if color is None:
-        return fallback
+def solid_color(solid: object, color_tool: object, shape_tool: object) -> np.ndarray:
+    """Look up the XDE color for a solid, falling back to DEFAULT_COLOR."""
+    color = Quantity_Color()
+    if color_tool.GetColor(solid, XCAFDoc_ColorSurf, color) or color_tool.GetColor(
+        solid, XCAFDoc_ColorGen, color
+    ):
+        return np.array([color.Red(), color.Green(), color.Blue()], dtype=np.float32)
 
-    rgba = tuple(color)
-    return np.array(rgba[:3], dtype=np.float32)
+    label = shape_tool.FindShape(solid)
+    if label and not label.IsNull():
+        ref_shape = shape_tool.GetShape_s(label)
+        if color_tool.GetColor(
+            ref_shape, XCAFDoc_ColorSurf, color
+        ) or color_tool.GetColor(ref_shape, XCAFDoc_ColorGen, color):
+            return np.array(
+                [color.Red(), color.Green(), color.Blue()], dtype=np.float32
+            )
 
-
-def leaf_shapes(shape: object, inherited_color: np.ndarray):
-    color = shape_color(shape, inherited_color)
-    children = getattr(shape, "children", None) or []
-    if children:
-        for child in children:
-            yield from leaf_shapes(child, color)
-        return
-
-    wrapped = getattr(shape, "wrapped", None)
-    if wrapped is not None:
-        yield wrapped, color
+    return DEFAULT_COLOR
 
 
 def face_geometry(shape: object, color: np.ndarray) -> RenderGeometry:
@@ -177,17 +182,40 @@ def face_geometry(shape: object, color: np.ndarray) -> RenderGeometry:
 
 
 def load_step_geometry(step_file: Path) -> RenderGeometry:
-    model = import_step(step_file)
+    app = XCAFApp_Application.GetApplication_s()
+    doc = TDocStd_Document(TCollection_ExtendedString("MDTV-XCAF"))
+    app.InitDocument(doc)
+
+    reader = STEPCAFControl_Reader()
+    reader.SetColorMode(True)
+    reader.SetNameMode(True)
+    status = reader.ReadFile(str(step_file))
+    if status.name != "IFSelect_RetDone":
+        raise ValueError(f"Failed to read STEP file: {step_file}")
+    reader.Transfer(doc)
+
+    shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(doc.Main())
+    color_tool = XCAFDoc_DocumentTool.ColorTool_s(doc.Main())
+
+    labels = TDF_LabelSequence()
+    shape_tool.GetFreeShapes(labels)
+    if labels.Length() == 0:
+        raise ValueError(f"No shapes found in {step_file}.")
+    root_shape = shape_tool.GetShape_s(labels.Value(1))
+
+    BRepMesh_IncrementalMesh(root_shape, 0.001, True, 0.5, True)
+
     triangles: list[Triangle] = []
     edges: list[EdgeSegment] = []
 
-    # Ratio-style deflection keeps screenshots reasonably smooth without making
-    # tiny models generate excessive triangles.
-    for shape, color in leaf_shapes(model, DEFAULT_COLOR):
-        BRepMesh_IncrementalMesh(shape, 0.001, True, 0.5, True)
-        geometry = face_geometry(shape, color)
+    solid_explorer = TopExp_Explorer(root_shape, TopAbs_SOLID)
+    while solid_explorer.More():
+        solid = TopoDS.Solid_s(solid_explorer.Current())
+        color = solid_color(solid, color_tool, shape_tool)
+        geometry = face_geometry(solid, color)
         triangles.extend(geometry.triangles)
         edges.extend(geometry.edges)
+        solid_explorer.Next()
 
     if not triangles:
         raise ValueError(f"No renderable faces found in {step_file}.")
