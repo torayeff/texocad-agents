@@ -28,7 +28,7 @@ DEFAULT_UPS: dict[str, tuple[float, float, float]] = {
     "left": (0.0, 0.0, 1.0),
     "right": (0.0, 0.0, 1.0),
     "top": (0.0, 1.0, 0.0),
-    "bottom": (0.0, 1.0, 0.0),
+    "bottom": (0.0, -1.0, 0.0),
 }
 
 

@@ -40,6 +40,15 @@ VIEW_DIRECTIONS: dict[str, tuple[float, float, float]] = {
     "left": (-1.0, 0.0, 0.0),
     "right": (1.0, 0.0, 0.0),
 }
+PRESET_UPS: dict[str, tuple[float, float, float]] = {
+    "iso": (0.0, 0.0, 1.0),
+    "front": (0.0, 0.0, 1.0),
+    "back": (0.0, 0.0, 1.0),
+    "top": (0.0, 1.0, 0.0),
+    "bottom": (0.0, -1.0, 0.0),
+    "left": (0.0, 0.0, 1.0),
+    "right": (0.0, 0.0, 1.0),
+}
 
 
 @dataclass(frozen=True)
@@ -233,11 +242,7 @@ def preset_camera(
     view: str, triangles: list[Triangle], size: tuple[int, int]
 ) -> Camera:
     direction = normalize(np.array(VIEW_DIRECTIONS[view], dtype=np.float64))
-    up = (
-        np.array([0.0, 1.0, 0.0], dtype=np.float64)
-        if abs(direction[2]) > 0.9
-        else np.array([0.0, 0.0, 1.0], dtype=np.float64)
-    )
+    up = np.array(PRESET_UPS[view], dtype=np.float64)
     return _fit_camera(direction=direction, up=up, triangles=triangles, size=size)
 
 
