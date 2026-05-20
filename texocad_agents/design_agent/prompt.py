@@ -3,6 +3,7 @@ from pathlib import Path
 PROMPT_DIR = Path(__file__).with_name("prompt")
 PROMPT_FILES = (
     "workflow_prompt.md",
+    "quality_check.md",
     "behaviours_prompt.md",
     "build123d_prompt.md",
 )
