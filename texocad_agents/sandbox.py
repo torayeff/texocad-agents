@@ -17,9 +17,15 @@ MAX_PROCESS_OUTPUT_CHARS = 20_000
 
 @dataclass(frozen=True)
 class SandboxConfig:
-    snapshot_name: str = "texocad-build123d-v2"
+    snapshot_name: str = "texocad-build123d-v3"
     python_version: str = "3.12"
-    pip_packages: tuple[str, ...] = ("build123d", "bd_warehouse", "pymupdf")
+    pip_packages: tuple[str, ...] = (
+        "build123d",
+        "bd_warehouse",
+        "numpy",
+        "pillow",
+        "pymupdf",
+    )
     apt_packages: tuple[str, ...] = ("libgl1", "libxrender1")
     cpu: int = 4
     memory: int = 8
@@ -44,6 +50,7 @@ class SandboxCommand:
     filename: str
     contents: bytes
     command: str
+    support_files: dict[str, bytes] | None = None
 
 
 def ensure_snapshot(daytona: Daytona, config: SandboxConfig = SANDBOX_CONFIG) -> None:
@@ -123,13 +130,7 @@ def run_python(
             env={"TEXOCAD_OUTPUT_DIR": remote_output_dir},
             timeout=config.exec_timeout,
         )
-        raw_output = response.result or ""
-        output = raw_output
-        if len(raw_output) > MAX_PROCESS_OUTPUT_CHARS:
-            output = (
-                raw_output[:MAX_PROCESS_OUTPUT_CHARS]
-                + "\n...[sandbox output truncated]..."
-            )
+        output = _truncate(response.result or "")
         if response.exit_code != 0:
             return SandboxRunResult(
                 exit_code=response.exit_code,
@@ -137,6 +138,11 @@ def run_python(
             )
 
         if post_run is not None:
+            for filename, contents in sorted((post_run.support_files or {}).items()):
+                sandbox.fs.upload_file(
+                    contents,
+                    posixpath.join(work_dir, posixpath.basename(filename)),
+                )
             sandbox.fs.upload_file(
                 post_run.contents,
                 posixpath.join(work_dir, posixpath.basename(post_run.filename)),
@@ -147,7 +153,7 @@ def run_python(
                 env={"TEXOCAD_OUTPUT_DIR": remote_output_dir},
                 timeout=config.exec_timeout,
             )
-            output = _append_output(output, response.result or "")
+            output = _truncate(f"{output}\n{response.result or ''}")
             if response.exit_code != 0:
                 return SandboxRunResult(
                     exit_code=response.exit_code,
@@ -155,19 +161,16 @@ def run_python(
                 )
 
         remote_output_files = sorted(
-            (
-                posixpath.join(remote_output_dir, item.name),
-                int(getattr(item, "size", 0) or 0),
-            )
+            posixpath.join(remote_output_dir, item.name)
             for item in sandbox.fs.list_files(remote_output_dir)
             if not item.is_dir
         )
 
         out_dir.mkdir(parents=True, exist_ok=True)
         files: list[Path] = []
-        for remote_output_path, _ in remote_output_files:
-            output_bytes = sandbox.fs.download_file(remote_output_path)
-            file_path = out_dir / posixpath.basename(remote_output_path)
+        for remote_path in remote_output_files:
+            output_bytes = sandbox.fs.download_file(remote_path)
+            file_path = out_dir / posixpath.basename(remote_path)
             file_path.write_bytes(output_bytes)
             files.append(file_path)
 
@@ -217,8 +220,7 @@ def _wait_for_active_snapshot(
         snapshot = daytona.snapshot.get(config.snapshot_name)
 
 
-def _append_output(output: str, extra: str) -> str:
-    raw_output = f"{output}\n{extra}" if output and extra else output or extra
-    if len(raw_output) <= MAX_PROCESS_OUTPUT_CHARS:
-        return raw_output
-    return raw_output[:MAX_PROCESS_OUTPUT_CHARS] + "\n...[sandbox output truncated]..."
+def _truncate(text: str) -> str:
+    if len(text) <= MAX_PROCESS_OUTPUT_CHARS:
+        return text
+    return text[:MAX_PROCESS_OUTPUT_CHARS] + "\n...[sandbox output truncated]..."

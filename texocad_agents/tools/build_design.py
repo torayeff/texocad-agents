@@ -19,7 +19,7 @@ from texocad_agents.storage import (
     upload_source_blob,
 )
 from texocad_agents.tools.preview_design import (
-    preview_command,
+    build_preview_command,
     save_preview,
 )
 from texocad_agents.tools.tool_runtime import (
@@ -84,7 +84,7 @@ def build_design(
             code,
             Path(tmpdir),
             support_files=support_files_for(file_path, runtime),
-            post_run=preview_command(),
+            post_run=build_preview_command(),
         )
 
         if result.exit_code != 0:
@@ -104,7 +104,7 @@ def build_design(
                 output=step_files_or_error,
             )
         step_files = step_files_or_error
-        preview_file = _preview_file(result.files)
+        preview_files = _preview_files(result.files)
 
         tables = get_design_tables()
         storage_container = get_storage_container()
@@ -143,20 +143,26 @@ def build_design(
             for step_file in step_files
         ]
 
-        preview = save_preview(
-            tables.design_previews,
-            storage_container,
-            owner_id=owner_id,
-            design_id=design_id,
-            revision_number=revision_number,
-            image_path=preview_file,
-            view="iso",
-            source_export_checksum=exports[0].checksum,
-            camera=None,
-            up=None,
-            thread_id=thread_id,
-            run_id=run_id,
-        )
+        previews: dict[str, dict] = {}
+        preview_errors: list[str] = []
+        for view, image_path in preview_files.items():
+            try:
+                previews[view] = save_preview(
+                    tables.design_previews,
+                    storage_container,
+                    owner_id=owner_id,
+                    design_id=design_id,
+                    revision_number=revision_number,
+                    image_path=image_path,
+                    view=view,
+                    source_export_checksum=exports[0].checksum,
+                    camera=None,
+                    up=None,
+                    thread_id=thread_id,
+                    run_id=run_id,
+                )
+            except Exception as exc:
+                preview_errors.append(f"{view}: {exc}")
 
     design_revision = save_design_revision_blobs(
         tables.design_revisions,
@@ -165,7 +171,7 @@ def build_design(
         exports,
     )
     preview_error = (
-        f"\npreview_failed: {preview['error']}" if preview.get("error") else ""
+        "\npreview_failed: " + "; ".join(preview_errors) if preview_errors else ""
     )
     content_blocks = [
         create_text_block(
@@ -177,13 +183,15 @@ def build_design(
             )
         )
     ]
-    if preview.get("image"):
-        content_blocks.append(
-            create_image_block(
-                base64=preview["image"],
-                mime_type="image/png",
-            )
-        )
+    for view, preview in previews.items():
+        if preview.get("image"):
+            content_blocks.extend([
+                create_text_block(text=f"{view} preview"),
+                create_image_block(
+                    base64=preview["image"],
+                    mime_type="image/png",
+                ),
+            ])
 
     return Command(
         update={
@@ -197,7 +205,11 @@ def build_design(
                             design_revision=design_revision,
                             source_blob=source_blob,
                             exports=exports,
-                            previews=preview["blobs"],
+                            previews=[
+                                blob
+                                for preview in previews.values()
+                                for blob in preview["blobs"]
+                            ],
                             thread_id=thread_id,
                             run_id=run_id,
                         )
@@ -242,13 +254,15 @@ def _validated_step_files(
     return step_files
 
 
-def _preview_file(files: tuple[Path, ...]) -> Path | None:
-    preview_files = tuple(
-        file_path for file_path in files if file_path.suffix.lower() == ".png"
-    )
-    if len(preview_files) != 1:
-        return None
-    return preview_files[0]
+def _preview_files(files: tuple[Path, ...]) -> dict[str, Path | None]:
+    png_files = [f for f in files if f.suffix.lower() == ".png"]
+    def by_suffix(suffix: str) -> Path | None:
+        matches = [f for f in png_files if f.name.endswith(suffix)]
+        return matches[0] if len(matches) == 1 else None
+    return {
+        "iso_ortho": by_suffix("_iso_ortho.png"),
+        "iso_render": by_suffix("_iso_render.png"),
+    }
 
 
 def _sandbox_failure_command(
