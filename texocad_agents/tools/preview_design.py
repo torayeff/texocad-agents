@@ -20,7 +20,7 @@ from texocad_agents.storage import (
 )
 from texocad_agents.tools.tool_runtime import error_tool_message
 
-PREVIEW_STYLES = {"ortho", "render"}
+PREVIEW_STYLES = {"ortho", "render", "both"}
 PREVIEW_SCRIPTS_DIR = Path(__file__).with_name("preview_scripts")
 PREVIEW_CONFIG_FILE = "preview_config.json"
 
@@ -34,7 +34,7 @@ def preview_design(
     revision_number: int,
     runtime: ToolRuntime,
     view: str = "iso",
-    style: str = "ortho",
+    style: str = "both",
     camera: list[float] | None = None,
     up: list[float] | None = None,
 ) -> Command | list:
@@ -48,7 +48,8 @@ def preview_design(
         revision_number: Stored design revision number to preview.
         view: Camera view to render. Use one of "iso", "top", "bottom", "front",
             "back", "left", or "right".
-        style: Preview style to render. Use "ortho" or "render".
+        style: Preview style. Use "both" (default) to produce ortho and render
+            previews, or "ortho" / "render" for a single style.
         camera: Optional custom camera position vector, for example [80, -120, 60].
         up: Optional custom up vector for camera renders, for example [0, 0, 1].
     """
@@ -57,7 +58,7 @@ def preview_design(
         cam = _vector(camera)
         up_vec = _vector(up)
         preview_style = _resolve_style(style)
-        view_name = f"{'custom' if cam else view.lower()}_{preview_style}"
+        styles = ["ortho", "render"] if preview_style == "both" else [preview_style]
 
         tables = get_design_tables()
         try:
@@ -76,44 +77,55 @@ def preview_design(
 
         export = _step_export(revision)
         container = get_storage_container()
+        content_blocks: list = []
+        view_names: list[str] = []
+
         with tempfile.TemporaryDirectory() as tmpdir:
             out_dir = Path(tmpdir)
             blob = container.get_blob_client(export.blob_name)
-            image_path = render_step(
-                blob.download_blob().readall(),
-                export.filename,
-                out_dir,
-                view=view,
-                style=preview_style,
-                camera=cam,
-                up=up_vec,
-            )
+            step_bytes = blob.download_blob().readall()
 
-            preview = save_preview(
-                tables.design_previews,
-                container,
-                owner_id=owner_id,
-                design_id=design_id,
-                revision_number=int(revision_number),
-                image_path=image_path,
-                view=view_name,
-                source_export_checksum=export.checksum,
-                camera=cam,
-                up=up_vec,
-                thread_id=thread_id,
-                run_id=run_id,
-            )
-
-        return [
-            create_text_block(
-                text=(
-                    f"Rendered and stored {view_name} preview.\n"
-                    f"design_id: {design_id}\n"
-                    f"revision_number: {revision_number}"
+            for render_style in styles:
+                view_name = f"{'custom' if cam else view.lower()}_{render_style}"
+                view_names.append(view_name)
+                image_path = render_step(
+                    step_bytes,
+                    export.filename,
+                    out_dir,
+                    view=view,
+                    style=render_style,
+                    camera=cam,
+                    up=up_vec,
                 )
-            ),
-            create_image_block(base64=preview["image"], mime_type="image/png"),
-        ]
+
+                preview = save_preview(
+                    tables.design_previews,
+                    container,
+                    owner_id=owner_id,
+                    design_id=design_id,
+                    revision_number=int(revision_number),
+                    image_path=image_path,
+                    view=view_name,
+                    source_export_checksum=export.checksum,
+                    camera=cam,
+                    up=up_vec,
+                    thread_id=thread_id,
+                    run_id=run_id,
+                )
+
+                content_blocks.append(create_text_block(text=f"{view_name} preview"))
+                content_blocks.append(
+                    create_image_block(base64=preview["image"], mime_type="image/png")
+                )
+
+        header = create_text_block(
+            text=(
+                f"Rendered and stored preview(s): {', '.join(view_names)}.\n"
+                f"design_id: {design_id}\n"
+                f"revision_number: {revision_number}"
+            )
+        )
+        return [header] + content_blocks
     except (PreviewError, ValueError) as exc:
         return error_tool_message(runtime, str(exc))
 
@@ -288,7 +300,9 @@ def _vector(vector: list[float] | None) -> tuple[float, float, float] | None:
 def _resolve_style(style: str) -> str:
     value = style.lower()
     if value not in PREVIEW_STYLES:
-        raise PreviewError(f"Unknown preview style {style!r}; expected: ortho, render.")
+        raise PreviewError(
+            f"Unknown preview style {style!r}; expected: ortho, render, or both."
+        )
     return value
 
 
