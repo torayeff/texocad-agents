@@ -216,11 +216,16 @@ def preset_camera(
         (radius / math.sin(fit_fov / 2.0)) * FIT_PADDING, MIN_CAMERA_DISTANCE
     )
     direction = normalize(np.array(VIEW_DIRECTIONS[view], dtype=np.float64))
+    up = (
+        np.array([0.0, 1.0, 0.0], dtype=np.float64)
+        if abs(direction[2]) > 0.9
+        else np.array([0.0, 0.0, 1.0], dtype=np.float64)
+    )
 
     return Camera(
         position=center + direction * distance,
         target=center,
-        up=np.array([0.0, 0.0, 1.0], dtype=np.float64),
+        up=up,
     )
 
 
@@ -229,9 +234,11 @@ def camera_basis(camera: Camera) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     view_up = normalize(camera.up)
     right = np.cross(forward, view_up)
     if np.linalg.norm(right) <= EPS:
-        raise ValueError("camera and up vectors must not be parallel")
-    else:
-        right = normalize(right)
+        view_up = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+        right = np.cross(forward, view_up)
+        if np.linalg.norm(right) <= EPS:
+            raise ValueError("camera and up vectors must not be parallel")
+    right = normalize(right)
     up = normalize(np.cross(right, forward))
     return right, up, forward
 
