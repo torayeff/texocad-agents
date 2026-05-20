@@ -1,5 +1,3 @@
-from pathlib import PurePosixPath
-
 from langchain_core.messages import ToolMessage
 from langgraph.prebuilt.tool_node import ToolRuntime
 from langgraph.types import Command
@@ -28,24 +26,6 @@ def read_runtime_file(file_path: str, runtime: ToolRuntime) -> str | None:
         if candidate in files:
             return file_text(files[candidate])
     return None
-
-
-def support_files_for(file_path: str, runtime: ToolRuntime) -> dict[str, bytes]:
-    script_path = PurePosixPath(normalize_path(file_path))
-    support_files: dict[str, bytes] = {}
-
-    for candidate_path, value in runtime_files(runtime).items():
-        attachment_path = PurePosixPath(normalize_path(str(candidate_path)))
-        if attachment_path.parent != script_path.parent:
-            continue
-        if attachment_path.suffix.lower() != ".svg":
-            continue
-
-        content = file_text(value)
-        if content is not None:
-            support_files[attachment_path.name] = content.encode("utf-8")
-
-    return support_files
 
 
 def file_text(value: object) -> str | None:

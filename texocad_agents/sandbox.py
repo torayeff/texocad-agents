@@ -17,11 +17,10 @@ MAX_PROCESS_OUTPUT_CHARS = 20_000
 
 @dataclass(frozen=True)
 class SandboxConfig:
-    snapshot_name: str = "texocad-build123d-v3"
+    snapshot_name: str = "texocad-cadquery-v1"
     python_version: str = "3.12"
     pip_packages: tuple[str, ...] = (
-        "build123d",
-        "bd_warehouse",
+        "cadquery",
         "numpy",
         "pillow",
         "pymupdf",

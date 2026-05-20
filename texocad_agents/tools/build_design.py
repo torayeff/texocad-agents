@@ -25,7 +25,6 @@ from texocad_agents.tools.preview_design import (
 from texocad_agents.tools.tool_runtime import (
     error_tool_message,
     read_runtime_file,
-    support_files_for,
 )
 
 MODEL_EXTENSION = ".step"
@@ -83,7 +82,6 @@ def build_design(
         result = run_python(
             code,
             Path(tmpdir),
-            support_files=support_files_for(file_path, runtime),
             post_run=build_preview_command(),
         )
 
@@ -256,9 +254,11 @@ def _validated_step_files(
 
 def _preview_files(files: tuple[Path, ...]) -> dict[str, Path | None]:
     png_files = [f for f in files if f.suffix.lower() == ".png"]
+
     def by_suffix(suffix: str) -> Path | None:
         matches = [f for f in png_files if f.name.endswith(suffix)]
         return matches[0] if len(matches) == 1 else None
+
     return {
         "iso_ortho": by_suffix("_iso_ortho.png"),
         "iso_render": by_suffix("_iso_render.png"),

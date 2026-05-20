@@ -5,7 +5,7 @@ PROMPT_FILES = (
     "workflow_prompt.md",
     "quality_check.md",
     "behaviours_prompt.md",
-    "build123d_prompt.md",
+    "cadquery_prompt.md",
 )
 
 

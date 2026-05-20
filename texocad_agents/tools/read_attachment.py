@@ -1,12 +1,8 @@
 import base64
 import mimetypes
-import re
 from pathlib import PurePosixPath
-from xml.etree import ElementTree as ET
 
 import fitz
-from deepagents.backends.utils import create_file_data
-from langchain_core.messages import ToolMessage
 from langchain_core.messages.content import create_image_block, create_text_block
 from langchain_core.tools import tool
 from langgraph.prebuilt.tool_node import ToolRuntime
@@ -27,7 +23,6 @@ SUPPORTED_IMAGE_TYPES = {
 }
 PDF_RENDER_DPI = 300
 MAX_TEXT_BYTES = 200 * 1024
-MAX_SVG_BYTES = 1 * 1024 * 1024
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 MAX_PDF_BYTES = 8 * 1024 * 1024
 MAX_PDF_PAGES = 10
@@ -38,7 +33,7 @@ MAX_PDF_RENDER_PIXELS = 30_000_000
 def read_attachment(attachment_path: str, runtime: ToolRuntime) -> Command | list | str:
     """Read an uploaded design reference or attachment.
 
-    Use this when the user asks about an uploaded image, PDF, SVG, or text file.
+    Use this when the user asks about an uploaded image, PDF, or text file.
     The attachment must belong to the current thread or authenticated user scope.
 
     Args:
@@ -75,6 +70,12 @@ def read_attachment(attachment_path: str, runtime: ToolRuntime) -> Command | lis
     extension = attachment.suffix.lower()
     mime_type, _ = mimetypes.guess_type(filename)
 
+    if extension == ".svg" or mime_type == "image/svg+xml":
+        return error_tool_message(
+            runtime,
+            "Refused: SVG attachments are not supported.",
+        )
+
     blob_client = get_storage_container().get_blob_client(blob_name)
     blob_size = blob_client.get_blob_properties().size
     size_error = _validate_attachment_size(blob_name, extension, mime_type, blob_size)
@@ -82,9 +83,6 @@ def read_attachment(attachment_path: str, runtime: ToolRuntime) -> Command | lis
         return error_tool_message(runtime, size_error)
 
     raw_bytes = blob_client.download_blob().readall()
-
-    if extension == ".svg":
-        return _read_svg(filename, raw_bytes, runtime)
 
     if mime_type == "application/pdf":
         pdf_result = _read_pdf(blob_name, raw_bytes)
@@ -107,23 +105,6 @@ def read_attachment(attachment_path: str, runtime: ToolRuntime) -> Command | lis
         )
 
     return f"Read '{blob_name}':\n\n{text}"
-
-
-def _read_svg(filename: str, raw_bytes: bytes, runtime: ToolRuntime) -> Command:
-    svg_text = raw_bytes.decode("utf-8")
-    summary = _summarize_svg(svg_text)
-    file_path = f"/models/{PurePosixPath(filename).stem}.svg"
-    return Command(
-        update={
-            "files": {file_path: create_file_data(svg_text)},
-            "messages": [
-                ToolMessage(
-                    content=f"Saved SVG to {file_path}.\n{summary}",
-                    tool_call_id=runtime.tool_call_id,
-                )
-            ],
-        }
-    )
 
 
 def _read_pdf(blob_name: str, raw_bytes: bytes) -> list | str:
@@ -159,9 +140,7 @@ def _validate_attachment_size(
     blob_size: int,
 ) -> str | None:
     max_bytes = MAX_TEXT_BYTES
-    if extension == ".svg":
-        max_bytes = MAX_SVG_BYTES
-    elif mime_type == "application/pdf":
+    if mime_type == "application/pdf":
         max_bytes = MAX_PDF_BYTES
     elif mime_type and mime_type.startswith("image/"):
         max_bytes = MAX_IMAGE_BYTES
@@ -214,41 +193,3 @@ def _read_image(blob_name: str, extension: str, raw_bytes: bytes) -> list | str:
             mime_type=SUPPORTED_IMAGE_TYPES[extension],
         ),
     ]
-
-
-def _summarize_svg(svg_text: str) -> str:
-    lines: list[str] = []
-
-    try:
-        root = ET.fromstring(svg_text)
-    except ET.ParseError:
-        return "Could not parse SVG XML."
-
-    viewbox = root.get("viewBox")
-    if viewbox:
-        lines.append(f"viewBox: {viewbox}")
-    width = root.get("width")
-    height = root.get("height")
-    if width and height:
-        lines.append(f"size: {width} x {height}")
-
-    colors: list[str] = []
-    path_count = 0
-    for elem in root.iter():
-        tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
-        if tag == "path":
-            path_count += 1
-        fill_attr = elem.get("fill")
-        if fill_attr and fill_attr.lower() not in ("none", ""):
-            colors.append(fill_attr.lower())
-        style = elem.get("style", "")
-        match = re.search(r"fill:\s*(#[0-9a-fA-F]{3,8})", style)
-        if match:
-            colors.append(match.group(1).lower())
-
-    unique_colors = list(dict.fromkeys(colors))
-    lines.append(f"paths: {path_count}")
-    if unique_colors:
-        lines.append(f"fill colors ({len(unique_colors)}): {', '.join(unique_colors)}")
-
-    return "\n".join(lines)

@@ -76,10 +76,12 @@ def main() -> None:
 
     if config.get("camera") is not None:
         view_name = "custom"
-        camera = Camera(
-            position=vector_from_sequence(config["camera"]),
-            target=vector_from_sequence(config.get("target") or (0.0, 0.0, 0.0)),
-            up=vector_from_sequence(config.get("up") or (0.0, 0.0, 1.0)),
+        camera = custom_camera(
+            raw_position=vector_from_sequence(config["camera"]),
+            raw_target=vector_from_sequence(config.get("target") or (0.0, 0.0, 0.0)),
+            raw_up=vector_from_sequence(config.get("up") or (0.0, 0.0, 1.0)),
+            triangles=geometry.triangles,
+            size=DEFAULT_SIZE,
         )
     else:
         view_name = config.get("view", "iso").lower()
@@ -230,6 +232,50 @@ def model_bounds(triangles: list[Triangle]) -> tuple[np.ndarray, np.ndarray]:
 def preset_camera(
     view: str, triangles: list[Triangle], size: tuple[int, int]
 ) -> Camera:
+    direction = normalize(np.array(VIEW_DIRECTIONS[view], dtype=np.float64))
+    up = (
+        np.array([0.0, 1.0, 0.0], dtype=np.float64)
+        if abs(direction[2]) > 0.9
+        else np.array([0.0, 0.0, 1.0], dtype=np.float64)
+    )
+    return _fit_camera(direction=direction, up=up, triangles=triangles, size=size)
+
+
+def custom_camera(
+    *,
+    raw_position: np.ndarray,
+    raw_target: np.ndarray,
+    raw_up: np.ndarray,
+    triangles: list[Triangle],
+    size: tuple[int, int],
+) -> Camera:
+    """Treat the user's camera/target as a direction hint and fit to bbox.
+
+    The literal user position is too easy to under-shoot (model gets cropped),
+    so we keep the direction but compute the distance from bounding-box radius
+    and FOV, matching the preset-view auto-fit behavior.
+    """
+    direction_vec = raw_position - raw_target
+    if float(np.linalg.norm(direction_vec)) < EPS:
+        direction_vec = np.array([1.0, -1.0, 0.8], dtype=np.float64)
+    direction = normalize(direction_vec)
+    up_vec = (
+        raw_up
+        if float(np.linalg.norm(raw_up)) > EPS
+        else np.array([0.0, 0.0, 1.0], dtype=np.float64)
+    )
+    return _fit_camera(
+        direction=direction, up=normalize(up_vec), triangles=triangles, size=size
+    )
+
+
+def _fit_camera(
+    *,
+    direction: np.ndarray,
+    up: np.ndarray,
+    triangles: list[Triangle],
+    size: tuple[int, int],
+) -> Camera:
     width, height = size
     bounds_min, bounds_max = model_bounds(triangles)
     center = (bounds_min + bounds_max) * 0.5
@@ -243,13 +289,6 @@ def preset_camera(
     distance = max(
         (radius / math.sin(fit_fov / 2.0)) * FIT_PADDING, MIN_CAMERA_DISTANCE
     )
-    direction = normalize(np.array(VIEW_DIRECTIONS[view], dtype=np.float64))
-    up = (
-        np.array([0.0, 1.0, 0.0], dtype=np.float64)
-        if abs(direction[2]) > 0.9
-        else np.array([0.0, 0.0, 1.0], dtype=np.float64)
-    )
-
     return Camera(
         position=center + direction * distance,
         target=center,
