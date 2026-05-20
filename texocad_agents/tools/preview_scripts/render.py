@@ -23,9 +23,9 @@ from PIL import Image, ImageDraw
 
 EPS = 1e-5
 FOV_DEGREES = 42.0
-FIT_PADDING = 1.18
-MIN_CAMERA_DISTANCE = 30.0
-DEFAULT_SIZE = (1024, 768)
+SIZE = 1024
+PADDING = 32
+DEFAULT_SIZE = (SIZE, SIZE)
 DEFAULT_COLOR = np.array([0xCF, 0xD6, 0xDF], dtype=np.float32) / 255.0
 BACKGROUND_COLOR = np.array([255, 255, 255], dtype=np.uint8)
 EDGE_COLOR = np.array([0x10, 0x18, 0x20], dtype=np.float32)
@@ -233,11 +233,6 @@ def load_step_geometry(step_file: Path) -> RenderGeometry:
     return RenderGeometry(triangles=triangles, edges=edges)
 
 
-def model_bounds(triangles: list[Triangle]) -> tuple[np.ndarray, np.ndarray]:
-    points = np.vstack([triangle.points for triangle in triangles])
-    return points.min(axis=0), points.max(axis=0)
-
-
 def preset_camera(
     view: str, triangles: list[Triangle], size: tuple[int, int]
 ) -> Camera:
@@ -254,12 +249,7 @@ def custom_camera(
     triangles: list[Triangle],
     size: tuple[int, int],
 ) -> Camera:
-    """Treat the user's camera/target as a direction hint and fit to bbox.
-
-    The literal user position is too easy to under-shoot (model gets cropped),
-    so we keep the direction but compute the distance from bounding-box radius
-    and FOV, matching the preset-view auto-fit behavior.
-    """
+    """Use camera/target as a direction hint, then fit to projected bounds."""
     direction_vec = raw_position - raw_target
     if float(np.linalg.norm(direction_vec)) < EPS:
         direction_vec = np.array([1.0, -1.0, 0.8], dtype=np.float64)
@@ -282,21 +272,36 @@ def _fit_camera(
     size: tuple[int, int],
 ) -> Camera:
     width, height = size
-    bounds_min, bounds_max = model_bounds(triangles)
-    center = (bounds_min + bounds_max) * 0.5
-    radius = float(np.linalg.norm(bounds_max - bounds_min) * 0.5)
-
-    vertical_fov = math.radians(FOV_DEGREES)
-    horizontal_fov = 2.0 * math.atan(
-        math.tan(vertical_fov / 2.0) * max(width / max(height, 1), 0.1)
+    points = np.vstack([triangle.points for triangle in triangles])
+    center = (points.min(axis=0) + points.max(axis=0)) * 0.5
+    camera = Camera(position=center + direction, target=center, up=up)
+    right, view_up, forward = camera_basis(camera)
+    offsets = points - center
+    camera_x = offsets @ right
+    camera_y = offsets @ view_up
+    target = (
+        center
+        + right * float((camera_x.min() + camera_x.max()) * 0.5)
+        + view_up * float((camera_y.min() + camera_y.max()) * 0.5)
     )
-    fit_fov = min(vertical_fov, horizontal_fov)
+
+    offsets = points - target
+    camera_x = offsets @ right
+    camera_y = offsets @ view_up
+    camera_z = offsets @ forward
+
+    focal = (height * 0.5) / math.tan(math.radians(FOV_DEGREES) * 0.5)
+    max_x = max(width * 0.5 - PADDING, 1.0)
+    max_y = max(height * 0.5 - PADDING, 1.0)
     distance = max(
-        (radius / math.sin(fit_fov / 2.0)) * FIT_PADDING, MIN_CAMERA_DISTANCE
+        float(np.max(np.abs(camera_x) * focal / max_x - camera_z)),
+        float(np.max(np.abs(camera_y) * focal / max_y - camera_z)),
+        float(-np.min(camera_z) + EPS),
+        EPS,
     )
     return Camera(
-        position=center + direction * distance,
-        target=center,
+        position=target + direction * distance,
+        target=target,
         up=up,
     )
 

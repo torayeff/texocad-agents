@@ -10,6 +10,7 @@ from PIL import Image, ImageChops
 
 SIZE = 1024
 PADDING = 32
+SVG_MARGIN = 16
 RENDER_OVERSAMPLE = 2
 CONFIG_FILE = "preview_config.json"
 VIEWS: dict[str, tuple[float, float, float]] = {
@@ -78,10 +79,10 @@ def render_step(step_file: Path, out_dir: Path, config: dict) -> Path:
         shape,
         str(svg_path),
         opt={
-            "width": SIZE,
-            "height": SIZE,
-            "marginLeft": 0,
-            "marginTop": 0,
+            "width": SIZE + 2 * SVG_MARGIN,
+            "height": SIZE + 2 * SVG_MARGIN,
+            "marginLeft": SVG_MARGIN,
+            "marginTop": SVG_MARGIN,
             "showAxes": False,
             "showHidden": True,
             "projectionDir": projection,
