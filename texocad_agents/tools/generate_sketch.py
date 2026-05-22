@@ -25,7 +25,11 @@ from texocad_agents.storage import (
     upload_preview_blob,
     user_scope_hash,
 )
-from texocad_agents.tools.tool_runtime import error_tool_message
+from texocad_agents.tools.tool_runtime import (
+    blob_payload,
+    error_tool_message,
+    resolve_tool_context,
+)
 
 SKETCH_CONTENT_TYPE = "image/png"
 SOURCE_CONTENT_TYPE = "text/plain; charset=utf-8"
@@ -84,27 +88,12 @@ def generate_sketch(
             "A mask can only be used together with images.",
         )
 
-    configurable = runtime.config.get("configurable", {})
-    metadata = runtime.config.get("metadata", {})
-    auth_user = configurable.get("langgraph_auth_user") or {}
-
-    owner_id = auth_user.get("identity")
-    if not owner_id:
+    ctx = resolve_tool_context(runtime)
+    if ctx is None:
         return error_tool_message(
             runtime,
-            "Refused: cannot create sketch artifacts without an authenticated owner.",
+            "Refused: cannot create sketch artifacts without an authenticated owner and thread.",
         )
-
-    raw_thread_id = configurable.get("thread_id")
-    if not raw_thread_id:
-        return error_tool_message(
-            runtime,
-            "Refused: cannot create sketch artifacts without a LangGraph thread_id.",
-        )
-
-    thread_id = str(raw_thread_id)
-    design_id = thread_id
-    run_id = configurable.get("run_id") or metadata.get("run_id")
 
     tables = get_design_tables()
     storage_container = get_storage_container()
@@ -113,7 +102,7 @@ def generate_sketch(
     if images:
         for image_path in images:
             image_bytes = _download_image(
-                storage_container, image_path, owner_id, thread_id
+                storage_container, image_path, ctx.owner_id, ctx.thread_id
             )
             if image_bytes is None:
                 return error_tool_message(
@@ -125,7 +114,9 @@ def generate_sketch(
 
     mask_buffer: io.BytesIO | None = None
     if mask:
-        mask_bytes = _download_image(storage_container, mask, owner_id, thread_id)
+        mask_bytes = _download_image(
+            storage_container, mask, ctx.owner_id, ctx.thread_id
+        )
         if mask_bytes is None:
             return error_tool_message(
                 runtime,
@@ -170,26 +161,26 @@ def generate_sketch(
 
     ensure_design(
         tables.designs,
-        owner_id,
-        design_id,
-        title=metadata.get("title") or "Sketch",
-        created_by_thread_id=thread_id,
-        created_by_run_id=run_id,
+        ctx.owner_id,
+        ctx.design_id,
+        title=ctx.metadata.get("title") or "Sketch",
+        created_by_thread_id=ctx.thread_id,
+        created_by_run_id=ctx.run_id,
     )
     design_revision = create_design_revision(
         tables.design_revisions,
-        owner_id,
-        design_id,
-        created_by_thread_id=thread_id,
-        created_by_run_id=run_id,
+        ctx.owner_id,
+        ctx.design_id,
+        created_by_thread_id=ctx.thread_id,
+        created_by_run_id=ctx.run_id,
     )
     revision_number = int(design_revision["revision_number"])
 
     source_blob = _upload_prompt_source(
-        storage_container, owner_id, design_id, revision_number, prompt
+        storage_container, ctx.owner_id, ctx.design_id, revision_number, prompt
     )
     export_blob = _upload_sketch_blob(
-        storage_container, owner_id, design_id, revision_number, image_bytes
+        storage_container, ctx.owner_id, ctx.design_id, revision_number, image_bytes
     )
 
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
@@ -199,24 +190,24 @@ def generate_sketch(
     try:
         preview_blob = upload_preview_blob(
             storage_container,
-            owner_id,
-            design_id,
+            ctx.owner_id,
+            ctx.design_id,
             revision_number,
             tmp_path,
             "sketch",
         )
         save_design_preview(
             tables.design_previews,
-            owner_id,
-            design_id,
+            ctx.owner_id,
+            ctx.design_id,
             revision_number,
             "sketch",
             preview_blob,
             source_export_checksum=export_blob.checksum,
             camera=None,
             up=None,
-            created_by_thread_id=thread_id,
-            created_by_run_id=run_id,
+            created_by_thread_id=ctx.thread_id,
+            created_by_run_id=ctx.run_id,
         )
     finally:
         tmp_path.unlink(missing_ok=True)
@@ -232,7 +223,7 @@ def generate_sketch(
         create_text_block(
             text=(
                 "Created sketch revision.\n"
-                f"design_id: {design_id}\n"
+                f"design_id: {ctx.design_id}\n"
                 f"revision_number: {revision_number}"
             )
         ),
@@ -249,13 +240,17 @@ def generate_sketch(
                     additional_kwargs={
                         "texocad_artifact": {
                             "type": "texocad.sketch_revision",
-                            "designId": design_id,
+                            "designId": ctx.design_id,
                             "revisionNumber": revision_number,
-                            "source": _blob_payload(source_blob),
-                            "exports": [_blob_payload(export_blob)],
-                            "previews": [_blob_payload(preview_blob)],
-                            "createdByThreadId": thread_id,
-                            **({"createdByRunId": str(run_id)} if run_id else {}),
+                            "source": blob_payload(source_blob),
+                            "exports": [blob_payload(export_blob)],
+                            "previews": [blob_payload(preview_blob)],
+                            "createdByThreadId": ctx.thread_id,
+                            **(
+                                {"createdByRunId": str(ctx.run_id)}
+                                if ctx.run_id
+                                else {}
+                            ),
                         }
                     },
                 )
@@ -337,12 +332,3 @@ def _upload_sketch_blob(
         content_type=SKETCH_CONTENT_TYPE,
         checksum=hashlib.sha256(image_bytes).hexdigest(),
     )
-
-
-def _blob_payload(blob: StoredBlob) -> dict:
-    return {
-        "filename": blob.filename,
-        "blobName": blob.blob_name,
-        "contentType": blob.content_type,
-        "checksum": blob.checksum,
-    }

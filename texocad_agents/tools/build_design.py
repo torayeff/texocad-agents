@@ -1,5 +1,4 @@
 import tempfile
-from dataclasses import asdict
 from pathlib import Path
 
 from langchain_core.messages import ToolMessage
@@ -23,8 +22,10 @@ from texocad_agents.tools.preview_design import (
     save_preview,
 )
 from texocad_agents.tools.tool_runtime import (
+    blob_payload,
     error_tool_message,
     read_runtime_file,
+    resolve_tool_context,
 )
 
 MODEL_EXTENSION = ".step"
@@ -56,27 +57,12 @@ def build_design(
             f"Could not find {file_path!r} in the agent filesystem.",
         )
 
-    configurable = runtime.config.get("configurable", {})
-    metadata = runtime.config.get("metadata", {})
-    auth_user = configurable.get("langgraph_auth_user") or {}
-
-    owner_id = auth_user.get("identity")
-    if not owner_id:
+    ctx = resolve_tool_context(runtime)
+    if ctx is None:
         return error_tool_message(
             runtime,
-            "Refused: cannot create design artifacts without an authenticated owner.",
+            "Refused: cannot create design artifacts without an authenticated owner and thread.",
         )
-
-    raw_thread_id = configurable.get("thread_id")
-    if not raw_thread_id:
-        return error_tool_message(
-            runtime,
-            "Refused: cannot create design artifacts without a LangGraph thread_id.",
-        )
-
-    thread_id = str(raw_thread_id)
-    design_id = thread_id
-    run_id = configurable.get("run_id") or metadata.get("run_id")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         result = run_python(
@@ -88,7 +74,7 @@ def build_design(
         if result.exit_code != 0:
             return _sandbox_failure_command(
                 runtime,
-                design_id=design_id,
+                design_id=ctx.design_id,
                 exit_code=result.exit_code,
                 output=result.output,
             )
@@ -97,7 +83,7 @@ def build_design(
         if isinstance(step_files_or_error, str):
             return _sandbox_failure_command(
                 runtime,
-                design_id=design_id,
+                design_id=ctx.design_id,
                 exit_code=1,
                 output=step_files_or_error,
             )
@@ -108,24 +94,24 @@ def build_design(
         storage_container = get_storage_container()
         ensure_design(
             tables.designs,
-            owner_id,
-            design_id,
-            title=metadata.get("title") or Path(file_path).stem,
-            created_by_thread_id=thread_id,
-            created_by_run_id=run_id,
+            ctx.owner_id,
+            ctx.design_id,
+            title=ctx.metadata.get("title") or Path(file_path).stem,
+            created_by_thread_id=ctx.thread_id,
+            created_by_run_id=ctx.run_id,
         )
         design_revision = create_design_revision(
             tables.design_revisions,
-            owner_id,
-            design_id,
-            created_by_thread_id=thread_id,
-            created_by_run_id=run_id,
+            ctx.owner_id,
+            ctx.design_id,
+            created_by_thread_id=ctx.thread_id,
+            created_by_run_id=ctx.run_id,
         )
         revision_number = int(design_revision["revision_number"])
         source_blob = upload_source_blob(
             storage_container,
-            owner_id,
-            design_id,
+            ctx.owner_id,
+            ctx.design_id,
             revision_number,
             Path(file_path).name,
             code,
@@ -133,8 +119,8 @@ def build_design(
         exports = [
             upload_export_blob(
                 storage_container,
-                owner_id,
-                design_id,
+                ctx.owner_id,
+                ctx.design_id,
                 revision_number,
                 step_file,
             )
@@ -148,16 +134,16 @@ def build_design(
                 previews[view] = save_preview(
                     tables.design_previews,
                     storage_container,
-                    owner_id=owner_id,
-                    design_id=design_id,
+                    owner_id=ctx.owner_id,
+                    design_id=ctx.design_id,
                     revision_number=revision_number,
                     image_path=image_path,
                     view=view,
                     source_export_checksum=exports[0].checksum,
                     camera=None,
                     up=None,
-                    thread_id=thread_id,
-                    run_id=run_id,
+                    thread_id=ctx.thread_id,
+                    run_id=ctx.run_id,
                 )
             except Exception as exc:
                 preview_errors.append(f"{view}: {exc}")
@@ -175,7 +161,7 @@ def build_design(
         create_text_block(
             text=(
                 "Created design revision.\n"
-                f"design_id: {design_id}\n"
+                f"design_id: {ctx.design_id}\n"
                 f"revision_number: {design_revision['revision_number']}"
                 f"{preview_error}"
             )
@@ -199,7 +185,7 @@ def build_design(
                     tool_call_id=runtime.tool_call_id,
                     additional_kwargs={
                         "texocad_artifact": _revision_artifact_payload(
-                            design_id=design_id,
+                            design_id=ctx.design_id,
                             design_revision=design_revision,
                             source_blob=source_blob,
                             exports=exports,
@@ -208,8 +194,8 @@ def build_design(
                                 for preview in previews.values()
                                 for blob in preview["blobs"]
                             ],
-                            thread_id=thread_id,
-                            run_id=run_id,
+                            thread_id=ctx.thread_id,
+                            run_id=ctx.run_id,
                         )
                     },
                 )
@@ -296,21 +282,11 @@ def _revision_artifact_payload(
         "type": "texocad.design_revision",
         "designId": design_id,
         "revisionNumber": int(design_revision["revision_number"]),
-        "source": _stored_blob_payload(source_blob),
-        "exports": [_stored_blob_payload(export) for export in exports],
-        "previews": [_stored_blob_payload(preview) for preview in previews],
+        "source": blob_payload(source_blob),
+        "exports": [blob_payload(export) for export in exports],
+        "previews": [blob_payload(preview) for preview in previews],
         "createdByThreadId": thread_id,
     }
     if run_id:
         payload["createdByRunId"] = str(run_id)
     return payload
-
-
-def _stored_blob_payload(blob) -> dict:
-    data = asdict(blob)
-    return {
-        "filename": data["filename"],
-        "blobName": data["blob_name"],
-        "contentType": data["content_type"],
-        "checksum": data["checksum"],
-    }

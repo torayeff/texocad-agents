@@ -1,6 +1,59 @@
+from dataclasses import dataclass
+
 from langchain_core.messages import ToolMessage
 from langgraph.prebuilt.tool_node import ToolRuntime
 from langgraph.types import Command
+
+from texocad_agents.storage import StoredBlob
+
+
+@dataclass(frozen=True)
+class ToolContext:
+    owner_id: str
+    thread_id: str
+    design_id: str
+    run_id: str | None
+    metadata: dict
+
+
+def resolve_tool_context(runtime: ToolRuntime) -> ToolContext | None:
+    """Extract authenticated owner/thread context from runtime config.
+
+    Returns None if owner_id or thread_id are missing (caller should
+    return an error_tool_message).
+    """
+    configurable = runtime.config.get("configurable", {})
+    metadata = runtime.config.get("metadata", {})
+    auth_user = configurable.get("langgraph_auth_user") or {}
+
+    owner_id = auth_user.get("identity")
+    if not owner_id:
+        return None
+
+    raw_thread_id = configurable.get("thread_id")
+    if not raw_thread_id:
+        return None
+
+    thread_id = str(raw_thread_id)
+    run_id = configurable.get("run_id") or metadata.get("run_id")
+
+    return ToolContext(
+        owner_id=owner_id,
+        thread_id=thread_id,
+        design_id=thread_id,
+        run_id=run_id,
+        metadata=metadata,
+    )
+
+
+def blob_payload(blob: StoredBlob) -> dict:
+    """Convert a StoredBlob to a camelCase dict for artifact payloads."""
+    return {
+        "filename": blob.filename,
+        "blobName": blob.blob_name,
+        "contentType": blob.content_type,
+        "checksum": blob.checksum,
+    }
 
 
 def normalize_path(file_path: str) -> str:

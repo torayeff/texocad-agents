@@ -18,7 +18,7 @@ from texocad_agents.storage import (
     save_design_preview,
     upload_preview_blob,
 )
-from texocad_agents.tools.tool_runtime import error_tool_message
+from texocad_agents.tools.tool_runtime import error_tool_message, resolve_tool_context
 
 PREVIEW_STYLES = {"ortho", "render", "both"}
 PREVIEW_SCRIPTS_DIR = Path(__file__).with_name("preview_scripts")
@@ -54,7 +54,11 @@ def preview_design(
         up: Optional custom up vector for camera renders, for example [0, 0, 1].
     """
     try:
-        owner_id, design_id, thread_id, run_id = _context(runtime)
+        ctx = resolve_tool_context(runtime)
+        if ctx is None:
+            raise PreviewError(
+                "Refused: cannot read design artifacts without an authenticated owner and thread."
+            )
         cam = _vector(camera)
         up_vec = _vector(up)
         preview_style = _resolve_style(style)
@@ -64,14 +68,14 @@ def preview_design(
         try:
             revision = get_design_revision(
                 tables.design_revisions,
-                owner_id,
-                design_id,
+                ctx.owner_id,
+                ctx.design_id,
                 int(revision_number),
             )
         except ResourceNotFoundError:
             raise PreviewError(
                 "Could not find design revision.\n"
-                f"design_id: {design_id}\n"
+                f"design_id: {ctx.design_id}\n"
                 f"revision_number: {revision_number}"
             )
 
@@ -101,16 +105,16 @@ def preview_design(
                 preview = save_preview(
                     tables.design_previews,
                     container,
-                    owner_id=owner_id,
-                    design_id=design_id,
+                    owner_id=ctx.owner_id,
+                    design_id=ctx.design_id,
                     revision_number=int(revision_number),
                     image_path=image_path,
                     view=view_name,
                     source_export_checksum=export.checksum,
                     camera=cam,
                     up=up_vec,
-                    thread_id=thread_id,
-                    run_id=run_id,
+                    thread_id=ctx.thread_id,
+                    run_id=ctx.run_id,
                 )
 
                 content_blocks.append(create_text_block(text=f"{view_name} preview"))
@@ -121,7 +125,7 @@ def preview_design(
         header = create_text_block(
             text=(
                 f"Rendered and stored preview(s): {', '.join(view_names)}.\n"
-                f"design_id: {design_id}\n"
+                f"design_id: {ctx.design_id}\n"
                 f"revision_number: {revision_number}"
             )
         )
@@ -239,28 +243,6 @@ def preview_config(
         "camera": camera,
         "up": up,
     }).encode("utf-8")
-
-
-def _context(runtime: ToolRuntime) -> tuple[str, str, str, str | None]:
-    configurable = runtime.config.get("configurable", {})
-    metadata = runtime.config.get("metadata", {})
-    auth_user = configurable.get("langgraph_auth_user") or {}
-
-    owner_id = auth_user.get("identity")
-    if not owner_id:
-        raise PreviewError(
-            "Refused: cannot read design artifacts without an authenticated owner."
-        )
-
-    raw_thread_id = configurable.get("thread_id")
-    if not raw_thread_id:
-        raise PreviewError(
-            "Refused: cannot read design artifacts without a LangGraph thread_id."
-        )
-
-    thread_id = str(raw_thread_id)
-    run_id = configurable.get("run_id") or metadata.get("run_id")
-    return owner_id, thread_id, thread_id, run_id
 
 
 def _step_export(revision: dict) -> StoredBlob:
