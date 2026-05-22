@@ -9,11 +9,6 @@ from langgraph.types import Command
 
 from texocad_agents.sandbox import run_python
 from texocad_agents.storage import (
-    create_design_revision,
-    ensure_design,
-    get_design_tables,
-    get_storage_container,
-    save_design_revision_blobs,
     upload_export_blob,
     upload_source_blob,
 )
@@ -22,10 +17,12 @@ from texocad_agents.tools.preview_design import (
     save_preview,
 )
 from texocad_agents.tools.tool_runtime import (
-    blob_payload,
+    create_revision,
     error_tool_message,
+    finalize_revision,
     read_runtime_file,
     resolve_tool_context,
+    revision_artifact_payload,
 )
 
 MODEL_EXTENSION = ".step"
@@ -90,24 +87,9 @@ def build_design(
         step_files = step_files_or_error
         preview_files = _preview_files(result.files)
 
-        tables = get_design_tables()
-        storage_container = get_storage_container()
-        ensure_design(
-            tables.designs,
-            ctx.owner_id,
-            ctx.design_id,
-            title=ctx.metadata.get("title") or Path(file_path).stem,
-            created_by_thread_id=ctx.thread_id,
-            created_by_run_id=ctx.run_id,
+        tables, storage_container, design_revision, revision_number = create_revision(
+            ctx, title=ctx.metadata.get("title") or Path(file_path).stem
         )
-        design_revision = create_design_revision(
-            tables.design_revisions,
-            ctx.owner_id,
-            ctx.design_id,
-            created_by_thread_id=ctx.thread_id,
-            created_by_run_id=ctx.run_id,
-        )
-        revision_number = int(design_revision["revision_number"])
         source_blob = upload_source_blob(
             storage_container,
             ctx.owner_id,
@@ -148,12 +130,7 @@ def build_design(
             except Exception as exc:
                 preview_errors.append(f"{view}: {exc}")
 
-    design_revision = save_design_revision_blobs(
-        tables.design_revisions,
-        design_revision,
-        source_blob,
-        exports,
-    )
+    design_revision = finalize_revision(tables, design_revision, source_blob, exports)
     preview_error = (
         "\npreview_failed: " + "; ".join(preview_errors) if preview_errors else ""
     )
@@ -184,7 +161,8 @@ def build_design(
                     content=content_blocks,
                     tool_call_id=runtime.tool_call_id,
                     additional_kwargs={
-                        "texocad_artifact": _revision_artifact_payload(
+                        "texocad_artifact": revision_artifact_payload(
+                            artifact_type="texocad.design_revision",
                             design_id=ctx.design_id,
                             design_revision=design_revision,
                             source_blob=source_blob,
@@ -266,27 +244,3 @@ def _sandbox_failure_command(
         f"exit_code: {exit_code}\n"
         f"output:\n{output.strip()}",
     )
-
-
-def _revision_artifact_payload(
-    *,
-    design_id: str,
-    design_revision: dict,
-    source_blob,
-    exports: list,
-    previews: list,
-    thread_id: str,
-    run_id: str | None,
-) -> dict:
-    payload = {
-        "type": "texocad.design_revision",
-        "designId": design_id,
-        "revisionNumber": int(design_revision["revision_number"]),
-        "source": blob_payload(source_blob),
-        "exports": [blob_payload(export) for export in exports],
-        "previews": [blob_payload(preview) for preview in previews],
-        "createdByThreadId": thread_id,
-    }
-    if run_id:
-        payload["createdByRunId"] = str(run_id)
-    return payload

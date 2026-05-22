@@ -198,6 +198,7 @@ def render_step(
                 camera=camera,
                 up=up,
             ),
+            "common.py": _runner_script("common").encode("utf-8"),
         },
     )
     if result.exit_code != 0:
@@ -226,6 +227,7 @@ def build_preview_command(view: str = "iso") -> SandboxCommand:
                 up=None,
             ),
             "render.py": _runner_script("render").encode("utf-8"),
+            "common.py": _runner_script("common").encode("utf-8"),
         },
     )
 

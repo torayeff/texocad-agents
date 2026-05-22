@@ -6,6 +6,7 @@ from pathlib import Path
 import cadquery as cq
 import fitz
 import numpy as np
+from common import find_step
 from PIL import Image, ImageChops
 
 SIZE = 1024
@@ -40,19 +41,6 @@ def main() -> None:
     step_path = find_step(out_dir, config.get("step_filename", ""))
     image_path = render_step(step_path, out_dir, config)
     print(f"preview: {image_path.name}")
-
-
-def find_step(out_dir: Path, step_filename: str) -> Path:
-    if step_filename:
-        step_path = out_dir / step_filename
-        if step_path.exists():
-            return step_path
-        return Path(step_filename)
-
-    step_files = list(out_dir.glob("*.step"))
-    if len(step_files) != 1:
-        raise ValueError(f"expected exactly one STEP file, found {len(step_files)}")
-    return step_files[0]
 
 
 def render_step(step_file: Path, out_dir: Path, config: dict) -> Path:

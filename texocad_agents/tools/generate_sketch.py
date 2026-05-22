@@ -14,21 +14,18 @@ from openai import OpenAI
 
 from texocad_agents.storage import (
     StoredBlob,
-    blob_path_from_url,
-    create_design_revision,
-    ensure_design,
-    get_design_tables,
     get_storage_container,
     revision_blob_name,
     save_design_preview,
-    save_design_revision_blobs,
     upload_preview_blob,
-    user_scope_hash,
 )
 from texocad_agents.tools.tool_runtime import (
-    blob_payload,
+    authorize_blob_access,
+    create_revision,
     error_tool_message,
+    finalize_revision,
     resolve_tool_context,
+    revision_artifact_payload,
 )
 
 SKETCH_CONTENT_TYPE = "image/png"
@@ -95,7 +92,6 @@ def generate_sketch(
             "Refused: cannot create sketch artifacts without an authenticated owner and thread.",
         )
 
-    tables = get_design_tables()
     storage_container = get_storage_container()
 
     input_image_buffers: list[io.BytesIO] = []
@@ -159,22 +155,9 @@ def generate_sketch(
 
     image_bytes = base64.b64decode(image_base64)
 
-    ensure_design(
-        tables.designs,
-        ctx.owner_id,
-        ctx.design_id,
-        title=ctx.metadata.get("title") or "Sketch",
-        created_by_thread_id=ctx.thread_id,
-        created_by_run_id=ctx.run_id,
+    tables, storage_container, design_revision, revision_number = create_revision(
+        ctx, title=ctx.metadata.get("title") or "Sketch"
     )
-    design_revision = create_design_revision(
-        tables.design_revisions,
-        ctx.owner_id,
-        ctx.design_id,
-        created_by_thread_id=ctx.thread_id,
-        created_by_run_id=ctx.run_id,
-    )
-    revision_number = int(design_revision["revision_number"])
 
     source_blob = _upload_prompt_source(
         storage_container, ctx.owner_id, ctx.design_id, revision_number, prompt
@@ -212,11 +195,8 @@ def generate_sketch(
     finally:
         tmp_path.unlink(missing_ok=True)
 
-    design_revision = save_design_revision_blobs(
-        tables.design_revisions,
-        design_revision,
-        source_blob,
-        [export_blob],
+    design_revision = finalize_revision(
+        tables, design_revision, source_blob, [export_blob]
     )
 
     content_blocks = [
@@ -238,20 +218,16 @@ def generate_sketch(
                     content=content_blocks,
                     tool_call_id=runtime.tool_call_id,
                     additional_kwargs={
-                        "texocad_artifact": {
-                            "type": "texocad.sketch_revision",
-                            "designId": ctx.design_id,
-                            "revisionNumber": revision_number,
-                            "source": blob_payload(source_blob),
-                            "exports": [blob_payload(export_blob)],
-                            "previews": [blob_payload(preview_blob)],
-                            "createdByThreadId": ctx.thread_id,
-                            **(
-                                {"createdByRunId": str(ctx.run_id)}
-                                if ctx.run_id
-                                else {}
-                            ),
-                        }
+                        "texocad_artifact": revision_artifact_payload(
+                            artifact_type="texocad.sketch_revision",
+                            design_id=ctx.design_id,
+                            design_revision=design_revision,
+                            source_blob=source_blob,
+                            exports=[export_blob],
+                            previews=[preview_blob],
+                            thread_id=ctx.thread_id,
+                            run_id=ctx.run_id,
+                        )
                     },
                 )
             ]
@@ -265,15 +241,10 @@ def _download_image(
     owner_id: str,
     thread_id: str,
 ) -> bytes | None:
-    blob_name = blob_path_from_url(image_path)
-
-    user_scope = f"users/{user_scope_hash(owner_id)}"
-    allowed_prefixes = (
-        f"{user_scope}/threads/{thread_id}/",
-        f"{user_scope}/uploads/",
-        f"{user_scope}/designs/",
+    blob_name = authorize_blob_access(
+        image_path, owner_id, thread_id, allow_designs=True
     )
-    if not blob_name.startswith(allowed_prefixes):
+    if blob_name is None:
         return None
 
     try:

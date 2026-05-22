@@ -9,11 +9,9 @@ from langgraph.prebuilt.tool_node import ToolRuntime
 from langgraph.types import Command
 
 from texocad_agents.storage import (
-    blob_path_from_url,
     get_storage_container,
-    user_scope_hash,
 )
-from texocad_agents.tools.tool_runtime import error_tool_message
+from texocad_agents.tools.tool_runtime import authorize_blob_access, error_tool_message
 
 SUPPORTED_IMAGE_TYPES = {
     ".png": "image/png",
@@ -43,25 +41,21 @@ def read_attachment(attachment_path: str, runtime: ToolRuntime) -> Command | lis
     auth_user = runtime.config["configurable"].get("langgraph_auth_user") or {}
     user_id = auth_user.get("identity")
 
-    blob_name = blob_path_from_url(attachment_path)
-    allowed_prefixes: tuple[str, ...]
-    if user_id:
-        user_scope = f"users/{user_scope_hash(user_id)}"
-        allowed_prefixes = (
-            f"{user_scope}/threads/{thread_id}/",
-            f"{user_scope}/uploads/",
+    if not user_id:
+        return error_tool_message(
+            runtime,
+            "Refused: cannot read attachments without an authenticated user.",
         )
-    else:
-        allowed_prefixes = ()
 
-    if not blob_name.startswith(allowed_prefixes):
+    blob_name = authorize_blob_access(attachment_path, user_id, thread_id)
+    if blob_name is None:
         return error_tool_message(
             runtime,
             (
                 "Refused: blob path is outside this thread/user scope. "
                 "Attachments must live under "
                 f"'users/<hash>/threads/{thread_id}/...'"
-                + (" or 'users/<hash>/uploads/...'." if user_id else ".")
+                " or 'users/<hash>/uploads/...'."
             ),
         )
 

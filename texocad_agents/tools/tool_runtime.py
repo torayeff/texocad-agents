@@ -4,7 +4,16 @@ from langchain_core.messages import ToolMessage
 from langgraph.prebuilt.tool_node import ToolRuntime
 from langgraph.types import Command
 
-from texocad_agents.storage import StoredBlob
+from texocad_agents.storage import (
+    StoredBlob,
+    blob_path_from_url,
+    create_design_revision,
+    ensure_design,
+    get_design_tables,
+    get_storage_container,
+    save_design_revision_blobs,
+    user_scope_hash,
+)
 
 
 @dataclass(frozen=True)
@@ -97,6 +106,28 @@ def file_text(value: object) -> str | None:
     return None
 
 
+def authorize_blob_access(
+    blob_path: str,
+    owner_id: str,
+    thread_id: str,
+    *,
+    allow_designs: bool = False,
+) -> str | None:
+    """Return the resolved blob_name if the owner may access it, else None."""
+    blob_name = blob_path_from_url(blob_path)
+    user_scope = f"users/{user_scope_hash(owner_id)}"
+    allowed_prefixes: tuple[str, ...] = (
+        f"{user_scope}/threads/{thread_id}/",
+        f"{user_scope}/uploads/",
+    )
+    if allow_designs:
+        allowed_prefixes = allowed_prefixes + (f"{user_scope}/designs/",)
+
+    if not blob_name.startswith(allowed_prefixes):
+        return None
+    return blob_name
+
+
 def error_tool_message(runtime: ToolRuntime, content: str) -> Command:
     return Command(
         update={
@@ -109,3 +140,69 @@ def error_tool_message(runtime: ToolRuntime, content: str) -> Command:
             ]
         }
     )
+
+
+def create_revision(
+    ctx: ToolContext, *, title: str
+) -> tuple[object, object, dict, int]:
+    """Ensure design exists and create a new revision.
+
+    Returns (tables, storage_container, design_revision, revision_number).
+    """
+    tables = get_design_tables()
+    storage_container = get_storage_container()
+    ensure_design(
+        tables.designs,
+        ctx.owner_id,
+        ctx.design_id,
+        title=title,
+        created_by_thread_id=ctx.thread_id,
+        created_by_run_id=ctx.run_id,
+    )
+    design_revision = create_design_revision(
+        tables.design_revisions,
+        ctx.owner_id,
+        ctx.design_id,
+        created_by_thread_id=ctx.thread_id,
+        created_by_run_id=ctx.run_id,
+    )
+    revision_number = int(design_revision["revision_number"])
+    return tables, storage_container, design_revision, revision_number
+
+
+def finalize_revision(
+    tables,
+    design_revision: dict,
+    source: StoredBlob,
+    exports: list[StoredBlob],
+) -> dict:
+    """Persist source and export blob metadata on the revision."""
+    return save_design_revision_blobs(
+        tables.design_revisions, design_revision, source, exports
+    )
+
+
+def revision_artifact_payload(
+    *,
+    artifact_type: str,
+    design_id: str,
+    design_revision: dict,
+    source_blob: StoredBlob,
+    exports: list[StoredBlob],
+    previews: list[StoredBlob],
+    thread_id: str,
+    run_id: str | None,
+) -> dict:
+    """Build the texocad_artifact dict attached to ToolMessage additional_kwargs."""
+    payload = {
+        "type": artifact_type,
+        "designId": design_id,
+        "revisionNumber": int(design_revision["revision_number"]),
+        "source": blob_payload(source_blob),
+        "exports": [blob_payload(export) for export in exports],
+        "previews": [blob_payload(preview) for preview in previews],
+        "createdByThreadId": thread_id,
+    }
+    if run_id:
+        payload["createdByRunId"] = str(run_id)
+    return payload
