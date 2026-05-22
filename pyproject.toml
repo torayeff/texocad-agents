@@ -17,6 +17,7 @@ dependencies = [
     "langchain-anthropic",
     "langchain-google-genai",
     "langchain-openai",
+    "openai",
     "langgraph",
     "langgraph-sdk",
     "pymupdf",
