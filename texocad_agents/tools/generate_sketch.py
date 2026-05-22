@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import io
+import os
 import tempfile
 from pathlib import Path
 
@@ -121,7 +122,8 @@ def generate_sketch(
             )
         mask_buffer = io.BytesIO(mask_bytes)
 
-    client = OpenAI()
+    openai_base_url = os.environ.get("OPENAI_API_BASE")
+    client = OpenAI(base_url=openai_base_url) if openai_base_url else OpenAI()
     try:
         if input_image_buffers:
             edit_kwargs: dict = {
