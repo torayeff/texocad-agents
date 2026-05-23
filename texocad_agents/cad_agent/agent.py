@@ -20,6 +20,6 @@ async def create_cad_agent(config: RunnableConfig) -> CompiledStateGraph:
         model=model,
         tools=[read_attachment, replace_file, create_cad, render_view],
         system_prompt=SYSTEM_PROMPT,
-        name="TexoCAD",
+        name="TexoCAD CAD",
         middleware=[retry_middleware],
     )
