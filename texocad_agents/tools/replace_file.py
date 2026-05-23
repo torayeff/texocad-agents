@@ -15,6 +15,11 @@ def replace_file(file_path: str, content: str, runtime: ToolRuntime) -> Command:
     Args:
         file_path: Path to the file, for example "/models/bracket.py".
         content: Complete replacement file content.
+        runtime: LangGraph tool runtime for the current tool call.
+
+    Returns:
+        Command that writes the replacement file content into agent state and
+        appends a confirmation tool message.
     """
 
     resolved_path = file_path if file_path.startswith("/") else f"/{file_path}"
