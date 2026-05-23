@@ -9,11 +9,7 @@ PROMPT_FILES = (
 )
 
 
-def load_system_prompt() -> str:
-    return "\n\n".join(
-        (PROMPT_DIR / prompt_file).read_text(encoding="utf-8").strip()
-        for prompt_file in PROMPT_FILES
-    )
-
-
-SYSTEM_PROMPT = load_system_prompt()
+SYSTEM_PROMPT = "\n\n".join(
+    (PROMPT_DIR / prompt_file).read_text(encoding="utf-8").strip()
+    for prompt_file in PROMPT_FILES
+)
