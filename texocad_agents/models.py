@@ -5,6 +5,7 @@ from langchain.chat_models import init_chat_model
 
 MODEL_TIMEOUT = httpx.Timeout(connect=30.0, read=1800.0, write=30.0, pool=30.0)
 MAX_RETRIES = 3
+DEFAULT_MODEL = "gpt-5.5"
 
 
 @dataclass(frozen=True)
@@ -26,14 +27,15 @@ MODELS: dict[str, ModelConfig] = {
     ),
 }
 
-DEFAULT_MODEL = "gpt-5.5"
 
+def create_model(model_key: str | None = None):
+    model_key = model_key or DEFAULT_MODEL
 
-def create_model(model_key: str):
     if model_key not in MODELS:
         raise ValueError(f"Unknown model key: {model_key}")
 
     model_config = MODELS[model_key]
+
     return init_chat_model(
         model_config.name,
         model_provider=model_config.provider,
