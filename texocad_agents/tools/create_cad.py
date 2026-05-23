@@ -17,27 +17,22 @@ from texocad_agents.storage import (
     save_design_revision_blobs,
     upload_blob,
 )
+from texocad_agents.tools._rendering import build_render_command, save_render
 from texocad_agents.tools._runtime import (
     ToolContext,
     create_revision,
     error_message,
+    get_tool_context,
     read_runtime_file,
     revision_artifact,
-    get_tool_context,
-)
-from texocad_agents.tools.render_view import (
-    ORTHO_STATUS_FILENAME,
-    SHADED_STATUS_FILENAME,
-    build_render_command,
-    save_render,
 )
 
 MODEL_EXTENSION = ".step"
 SOURCE_CONTENT_TYPE = "text/x-python; charset=utf-8"
-ALLOWED_OUTPUT_SUFFIXES = {".step", ".png", ".status"}
-RENDER_RUNNER_BY_VIEW: dict[str, tuple[str, str, str]] = {
-    "iso_ortho": (ORTHO_STATUS_FILENAME, "ortho.py", "_iso_ortho.png"),
-    "iso_shaded": (SHADED_STATUS_FILENAME, "shaded.py", "_iso_shaded.png"),
+ALLOWED_OUTPUT_SUFFIXES = {".step", ".png"}
+DEFAULT_RENDER_OUTPUTS: dict[str, tuple[str, str]] = {
+    "iso_ortho": ("ortho.py", "_iso_ortho.png"),
+    "iso_shaded": ("shaded.py", "_iso_shaded.png"),
 }
 
 
@@ -92,7 +87,7 @@ def create_cad(
             )
 
         try:
-            step_files = _validated_step_files(result.files)
+            step_file = _validated_step_file(result.files)
         except _SandboxOutputError as exc:
             return _sandbox_failure_command(
                 runtime,
@@ -101,44 +96,54 @@ def create_cad(
                 output=str(exc),
             )
 
-        tables, storage_container, design_revision, revision_number = create_revision(
-            ctx, title=ctx.metadata.get("title") or Path(file_path).stem
-        )
-        source_blob = _upload_source(
-            storage_container,
-            ctx,
-            revision_number,
-            filename=Path(file_path).name,
-            code=code,
-        )
-        exports = [
-            _upload_export(storage_container, ctx, revision_number, step_file)
-            for step_file in step_files
-        ]
-        renders, render_errors = _save_renders(
-            tables,
-            storage_container,
-            ctx,
-            revision_number=revision_number,
-            files=result.files,
-            export_checksum=exports[0].checksum,
-        )
+        try:
+            tables, storage_container, design_revision, revision_number = (
+                create_revision(
+                    ctx, title=ctx.metadata.get("title") or Path(file_path).stem
+                )
+            )
+            source_blob = _upload_source(
+                storage_container,
+                ctx,
+                revision_number,
+                filename=Path(file_path).name,
+                code=code,
+            )
+            export_blob = _upload_export(
+                storage_container, ctx, revision_number, step_file
+            )
+            renders, render_errors = _save_renders(
+                tables,
+                storage_container,
+                ctx,
+                revision_number=revision_number,
+                files=result.files,
+                sandbox_output=result.output,
+                export_checksum=export_blob.checksum,
+            )
+            design_revision = save_design_revision_blobs(
+                tables.design_revisions, design_revision, source_blob, [export_blob]
+            )
+        except Exception as exc:
+            return error_message(
+                runtime,
+                "Failed to persist design revision.\n"
+                f"design_id: {ctx.design_id}\n"
+                f"error: {exc}",
+            )
 
-    design_revision = save_design_revision_blobs(
-        tables.design_revisions, design_revision, source_blob, exports
-    )
     return _revision_message(
         runtime,
         ctx=ctx,
         design_revision=design_revision,
         source_blob=source_blob,
-        exports=exports,
+        exports=[export_blob],
         renders=renders,
         render_errors=render_errors,
     )
 
 
-def _validated_step_files(files: tuple[Path, ...]) -> tuple[Path, ...]:
+def _validated_step_file(files: tuple[Path, ...]) -> Path:
     unsupported = [
         file_path.name
         for file_path in files
@@ -146,7 +151,7 @@ def _validated_step_files(files: tuple[Path, ...]) -> tuple[Path, ...]:
     ]
     if unsupported:
         raise _SandboxOutputError(
-            "Sandbox output must contain only .step / .png / .status files; "
+            "Sandbox output must contain only .step / .png files; "
             f"found unsupported file(s): {', '.join(unsupported)}."
         )
 
@@ -166,7 +171,7 @@ def _validated_step_files(files: tuple[Path, ...]) -> tuple[Path, ...]:
             f"{size} bytes; limit is {MAX_MODEL_BYTES} bytes."
         )
 
-    return step_files
+    return step_file
 
 
 def _save_renders(
@@ -176,27 +181,31 @@ def _save_renders(
     *,
     revision_number: int,
     files: tuple[Path, ...],
+    sandbox_output: str,
     export_checksum: str,
 ) -> tuple[dict[str, dict], list[str]]:
-    render_outputs = _parse_render_output(files)
+    png_files = [file_path for file_path in files if file_path.suffix.lower() == ".png"]
     renders: dict[str, dict] = {}
     errors: list[str] = []
 
-    for view, (status, image_path) in render_outputs.items():
-        runner_name = RENDER_RUNNER_BY_VIEW[view][1]
-        if image_path is None:
-            if status is None:
+    for view, (runner_name, png_suffix) in DEFAULT_RENDER_OUTPUTS.items():
+        matches = [
+            file_path for file_path in png_files if file_path.name.endswith(png_suffix)
+        ]
+        if len(matches) != 1:
+            if len(matches) > 1:
                 errors.append(
-                    f"{view} render unavailable: {runner_name} produced no PNG"
-                )
-            elif status == 0:
-                errors.append(
-                    f"{view} render unavailable: {runner_name} exited 0 "
-                    "but produced no PNG"
+                    f"{view} render unavailable: {runner_name} produced "
+                    f"{len(matches)} matching PNGs"
                 )
             else:
-                errors.append(f"{view} render unavailable: {runner_name} exit {status}")
+                errors.append(
+                    f"{view} render unavailable: {runner_name} produced no PNG"
+                    f"{_render_log_suffix(sandbox_output)}"
+                )
             continue
+
+        image_path = matches[0]
         try:
             renders[view] = save_render(
                 tables.design_previews,
@@ -217,26 +226,11 @@ def _save_renders(
     return renders, errors
 
 
-def _parse_render_output(
-    files: tuple[Path, ...],
-) -> dict[str, tuple[int | None, Path | None]]:
-    by_name = {path.name: path for path in files}
-    png_files = [f for f in files if f.suffix.lower() == ".png"]
-    outputs: dict[str, tuple[int | None, Path | None]] = {}
-
-    for view, (status_filename, _, png_suffix) in RENDER_RUNNER_BY_VIEW.items():
-        path = by_name.get(status_filename)
-        if path is None:
-            status = None
-        else:
-            try:
-                status = int(path.read_text().strip())
-            except ValueError:
-                status = None
-        matches = [f for f in png_files if f.name.endswith(png_suffix)]
-        outputs[view] = (status, matches[0] if len(matches) == 1 else None)
-
-    return outputs
+def _render_log_suffix(output: str) -> str:
+    log = output.strip()
+    if not log:
+        return ""
+    return f"; sandbox output:\n{log}"
 
 
 def _upload_source(
