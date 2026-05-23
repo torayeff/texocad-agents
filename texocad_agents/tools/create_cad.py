@@ -178,8 +178,7 @@ def _save_renders(
     files: tuple[Path, ...],
     export_checksum: str,
 ) -> tuple[dict[str, dict], list[str]]:
-    runner_status = _runner_status(files)
-    render_files = _render_files(files)
+    runner_status, render_files = _parse_render_output(files)
     renders: dict[str, dict] = {}
     errors: list[str] = []
 
@@ -219,8 +218,12 @@ def _save_renders(
     return renders, errors
 
 
-def _runner_status(files: tuple[Path, ...]) -> dict[str, int | None]:
+def _parse_render_output(
+    files: tuple[Path, ...],
+) -> tuple[dict[str, int | None], dict[str, Path | None]]:
     by_name = {path.name: path for path in files}
+    png_files = [f for f in files if f.suffix.lower() == ".png"]
+
     status: dict[str, int | None] = {}
     for view, (status_filename, _) in RENDER_RUNNER_BY_VIEW.items():
         path = by_name.get(status_filename)
@@ -231,20 +234,17 @@ def _runner_status(files: tuple[Path, ...]) -> dict[str, int | None]:
             status[view] = int(path.read_text().strip())
         except ValueError:
             status[view] = None
-    return status
-
-
-def _render_files(files: tuple[Path, ...]) -> dict[str, Path | None]:
-    png_files = [f for f in files if f.suffix.lower() == ".png"]
 
     def by_suffix(suffix: str) -> Path | None:
         matches = [f for f in png_files if f.name.endswith(suffix)]
         return matches[0] if len(matches) == 1 else None
 
-    return {
+    render_files = {
         "iso_ortho": by_suffix("_iso_ortho.png"),
         "iso_shaded": by_suffix("_iso_shaded.png"),
     }
+
+    return status, render_files
 
 
 def _upload_source(
