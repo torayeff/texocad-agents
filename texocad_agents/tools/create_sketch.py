@@ -2,6 +2,7 @@
 
 import base64
 import io
+import json
 import os
 
 from langchain_core.messages import ToolMessage
@@ -12,9 +13,12 @@ from langgraph.types import Command
 from openai import OpenAI
 from PIL import Image, UnidentifiedImageError
 
+from texocad_agents.sketch_agent.prompt import IMAGE_PROMPT_TEMPLATE
 from texocad_agents.storage import (
     RENDER_CONTENT_TYPE,
+    get_design_tables,
     get_storage_container,
+    list_design_revisions,
     revision_blob_name,
     save_design_preview,
     save_design_revision_blobs,
@@ -31,25 +35,26 @@ from texocad_agents.tools._runtime import (
 
 SKETCH_CONTENT_TYPE = "image/png"
 PROMPT_CONTENT_TYPE = "text/plain; charset=utf-8"
+DEFAULT_QUALITY = "low"
+DEFAULT_SIZE = "1024x1024"
 ALLOWED_QUALITIES = {"low", "medium", "high", "auto"}
-ALLOWED_SIZES = {
-    "1024x1024",
-    "1536x1024",
-    "1024x1536",
-    "2048x2048",
-    "auto",
-}
 MAX_INPUT_IMAGES = 4
+SUPPORTED_INPUT_IMAGE_FORMATS = {
+    "JPEG": ("image.jpg", "image/jpeg"),
+    "PNG": ("image.png", "image/png"),
+    "WEBP": ("image.webp", "image/webp"),
+}
+ImageUpload = tuple[str, io.BytesIO, str]
 
 
 @tool(parse_docstring=True)
 def create_sketch(
     prompt: str,
     runtime: ToolRuntime,
-    quality: str = "auto",
-    size: str = "auto",
+    quality: str = DEFAULT_QUALITY,
     images: list[str] | None = None,
     mask: str | None = None,
+    edit_previous: bool = False,
 ) -> Command:
     """Generate or edit an image and store it as a design revision.
 
@@ -61,14 +66,24 @@ def create_sketch(
     Args:
         prompt: Detailed text description of the image to generate, or edit instructions when images are provided.
         runtime: LangGraph tool runtime for the current tool call.
-        quality: Image quality - "low", "medium", "high", or "auto".
-        size: Image dimensions - "1024x1024", "1536x1024", "1024x1536", "2048x2048", or "auto".
+        quality: Image quality - "low" for drafts, "medium", "high" for final output, or "auto". Defaults to "low".
         images: List of blob paths or URLs for input images. Can include user-uploaded attachments or previous revision exports. When provided, the model edits or uses them as reference.
         mask: Blob path or URL of a mask image (PNG with alpha channel). Transparent areas indicate where the model should edit. Applied to the first image. Only used when images is provided.
+        edit_previous: Set true when the user is editing the current sketch. If images is omitted, the latest sketch export from this thread is used as the input image.
     """
-    validation_error = _validate_args(quality, size, images, mask)
-    if validation_error:
-        return error_message(runtime, validation_error)
+    if quality not in ALLOWED_QUALITIES:
+        return error_message(
+            runtime,
+            f"Invalid quality {quality!r}. "
+            f"Must be one of: {', '.join(sorted(ALLOWED_QUALITIES))}.",
+        )
+    if images and len(images) > MAX_INPUT_IMAGES:
+        return error_message(
+            runtime,
+            f"Too many input images ({len(images)}). Maximum is {MAX_INPUT_IMAGES}.",
+        )
+    if mask and not (images or edit_previous):
+        return error_message(runtime, "A mask can only be used together with images.")
 
     ctx = get_tool_context(runtime)
     if ctx is None:
@@ -77,9 +92,20 @@ def create_sketch(
             "Refused: cannot create sketch artifacts without an authenticated owner and thread.",
         )
 
+    input_images = images
+    if edit_previous and not input_images:
+        latest_export = _latest_sketch_export(ctx)
+        if latest_export is None:
+            return error_message(
+                runtime,
+                "No previous sketch image found in this thread to edit. Create a sketch first or provide an image.",
+            )
+        input_images = [latest_export]
+
+    image_prompt = f"{IMAGE_PROMPT_TEMPLATE}\n\nUser request:\n{prompt.strip()}"
     storage_container = get_storage_container()
     image_buffers, mask_buffer, fetch_error = _fetch_input_buffers(
-        storage_container, ctx, images, mask
+        storage_container, ctx, input_images, mask
     )
     if fetch_error:
         return error_message(runtime, fetch_error)
@@ -91,9 +117,9 @@ def create_sketch(
             edit_kwargs: dict = {
                 "model": "gpt-image-2",
                 "image": image_buffers if len(image_buffers) > 1 else image_buffers[0],
-                "prompt": prompt,
+                "prompt": image_prompt,
                 "quality": quality,
-                "size": size,
+                "size": DEFAULT_SIZE,
             }
             if mask_buffer:
                 edit_kwargs["mask"] = mask_buffer
@@ -101,9 +127,9 @@ def create_sketch(
         else:
             result = client.images.generate(
                 model="gpt-image-2",
-                prompt=prompt,
+                prompt=image_prompt,
                 quality=quality,
-                size=size,
+                size=DEFAULT_SIZE,
             )
     except Exception as exc:
         return error_message(runtime, f"Image generation failed: {exc}")
@@ -113,16 +139,17 @@ def create_sketch(
         return error_message(runtime, "Image generation returned no image data.")
     image_bytes = base64.b64decode(image_base64)
 
-    if image_error := _validate_image_bytes(image_bytes):
-        return error_message(
-            runtime, f"Generated image is not a valid PNG: {image_error}"
-        )
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as image:
+            image.verify()
+    except (UnidentifiedImageError, OSError, ValueError) as exc:
+        return error_message(runtime, f"Generated image is not a valid PNG: {exc}")
 
     try:
         return _store_sketch(
             runtime,
             ctx=ctx,
-            prompt=prompt,
+            prompt=image_prompt,
             image_bytes=image_bytes,
             image_base64=image_base64,
         )
@@ -238,38 +265,27 @@ def _store_sketch(
     )
 
 
-def _validate_args(
-    quality: str,
-    size: str,
-    images: list[str] | None,
-    mask: str | None,
-) -> str | None:
-    """Validate image generation options.
+def _latest_sketch_export(ctx: ToolContext) -> str | None:
+    """Return the newest stored sketch PNG export for this design thread."""
+    tables = get_design_tables()
+    revisions = list_design_revisions(
+        tables.design_revisions,
+        ctx.owner_id,
+        ctx.design_id,
+    )
+    for revision in reversed(revisions):
+        try:
+            exports = json.loads(revision.get("exports_json") or "[]")
+        except json.JSONDecodeError:
+            continue
+        for export in exports:
+            if (
+                export.get("filename") == "sketch.png"
+                and export.get("content_type") == SKETCH_CONTENT_TYPE
+                and export.get("blob_name")
+            ):
+                return export["blob_name"]
 
-    Args:
-        quality: Requested image quality.
-        size: Requested image size.
-        images: Optional input image blob paths.
-        mask: Optional mask image blob path.
-
-    Returns:
-        Error message when validation fails, otherwise None.
-    """
-
-    if quality not in ALLOWED_QUALITIES:
-        return (
-            f"Invalid quality {quality!r}. "
-            f"Must be one of: {', '.join(sorted(ALLOWED_QUALITIES))}."
-        )
-    if size not in ALLOWED_SIZES:
-        return (
-            f"Invalid size {size!r}. "
-            f"Must be one of: {', '.join(sorted(ALLOWED_SIZES))}."
-        )
-    if images and len(images) > MAX_INPUT_IMAGES:
-        return f"Too many input images ({len(images)}). Maximum is {MAX_INPUT_IMAGES}."
-    if mask and not images:
-        return "A mask can only be used together with images."
     return None
 
 
@@ -278,27 +294,15 @@ def _fetch_input_buffers(
     ctx: ToolContext,
     images: list[str] | None,
     mask: str | None,
-) -> tuple[list[io.BytesIO], io.BytesIO | None, str | None]:
-    """Download and validate input image and mask buffers.
-
-    Args:
-        storage_container: Azure Blob container client.
-        ctx: Authenticated tool context.
-        images: Optional input image blob paths.
-        mask: Optional mask image blob path.
-
-    Returns:
-        Tuple of `(image_buffers, mask_buffer, error)`.
-    """
-
-    image_buffers: list[io.BytesIO] = []
+) -> tuple[list[ImageUpload], ImageUpload | None, str | None]:
+    image_buffers: list[ImageUpload] = []
     for image_path in images or []:
         buffer, error = _download_validated_image(storage_container, image_path, ctx)
         if buffer is None:
             return [], None, error
         image_buffers.append(buffer)
 
-    mask_buffer: io.BytesIO | None = None
+    mask_buffer: ImageUpload | None = None
     if mask:
         mask_buffer, error = _download_validated_image(storage_container, mask, ctx)
         if mask_buffer is None:
@@ -311,18 +315,7 @@ def _download_validated_image(
     storage_container,
     image_path: str,
     ctx: ToolContext,
-) -> tuple[io.BytesIO | None, str | None]:
-    """Download a user-scoped image and verify it can be opened.
-
-    Args:
-        storage_container: Azure Blob container client.
-        image_path: Blob path or URL to authorize and download.
-        ctx: Authenticated tool context.
-
-    Returns:
-        Tuple of `(image_buffer, error)`.
-    """
-
+) -> tuple[ImageUpload | None, str | None]:
     blob_name = authorize_blob_access(image_path, ctx)
     if blob_name is None:
         return (
@@ -337,27 +330,21 @@ def _download_validated_image(
     except Exception as exc:
         return None, f"Could not download image from {image_path!r}: {exc}"
 
-    if image_error := _validate_image_bytes(image_bytes):
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as image:
+            image.verify()
+            metadata = SUPPORTED_INPUT_IMAGE_FORMATS.get(image.format)
+    except (UnidentifiedImageError, OSError, ValueError) as exc:
         return (
             None,
-            f"Refused image {image_path!r}: not a readable image ({image_error}).",
+            f"Refused image {image_path!r}: not a readable image ({exc}).",
         )
 
-    return io.BytesIO(image_bytes), None
+    if metadata is None:
+        return (
+            None,
+            f"Refused image {image_path!r}: unsupported image format; supported formats are JPEG, PNG, and WEBP.",
+        )
 
-
-def _validate_image_bytes(image_bytes: bytes) -> str | None:
-    """Verify image bytes with Pillow.
-
-    Args:
-        image_bytes: Raw image bytes.
-
-    Returns:
-        Error text when validation fails, otherwise None.
-    """
-
-    try:
-        Image.open(io.BytesIO(image_bytes)).verify()
-    except (UnidentifiedImageError, OSError, ValueError) as exc:
-        return str(exc)
-    return None
+    filename, content_type = metadata
+    return (filename, io.BytesIO(image_bytes), content_type), None
