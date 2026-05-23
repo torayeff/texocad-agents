@@ -23,7 +23,7 @@ from texocad_agents.tools._runtime import (
     error_message,
     read_runtime_file,
     revision_artifact,
-    tool_context,
+    get_tool_context,
 )
 from texocad_agents.tools.render_view import (
     ORTHO_STATUS_FILENAME,
@@ -69,7 +69,7 @@ def create_cad(
             f"Could not find {file_path!r} in the agent filesystem.",
         )
 
-    ctx = tool_context(runtime)
+    ctx = get_tool_context(runtime)
     if ctx is None:
         return error_message(
             runtime,

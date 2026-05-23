@@ -22,7 +22,7 @@ from texocad_agents.storage import (
     save_design_preview,
     upload_blob,
 )
-from texocad_agents.tools._runtime import error_message, tool_context
+from texocad_agents.tools._runtime import error_message, get_tool_context
 
 RENDER_STYLES = {"ortho", "shaded", "both"}
 RENDER_RUNNERS_DIR = Path(__file__).with_name("render_runners")
@@ -63,7 +63,7 @@ def render_view(
         up: Optional custom up vector for camera renders, for example [0, 0, 1].
     """
     try:
-        ctx = tool_context(runtime)
+        ctx = get_tool_context(runtime)
         if ctx is None:
             raise ValueError(
                 "Refused: cannot read design artifacts without an authenticated owner and thread."

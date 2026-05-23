@@ -14,7 +14,7 @@ from texocad_agents.storage import get_storage_container
 from texocad_agents.tools._runtime import (
     authorize_blob_access,
     error_message,
-    tool_context,
+    get_tool_context,
 )
 
 PDF_RENDER_DPI = 300
@@ -42,7 +42,7 @@ def read_attachment(attachment_path: str, runtime: ToolRuntime) -> Command | lis
     Args:
         attachment_path: Blob path or URL for the uploaded attachment.
     """
-    ctx = tool_context(runtime)
+    ctx = get_tool_context(runtime)
     if ctx is None:
         return error_message(
             runtime,

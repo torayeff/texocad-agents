@@ -36,7 +36,7 @@ class ToolContext:
     metadata: dict
 
 
-def tool_context(runtime: ToolRuntime) -> ToolContext | None:
+def get_tool_context(runtime: ToolRuntime) -> ToolContext | None:
     """Extract authenticated owner/thread context from runtime config.
 
     One design is associated with each LangGraph thread, so `design_id` is
@@ -82,8 +82,8 @@ def read_runtime_file(file_path: str, runtime: ToolRuntime) -> str | None:
         runtime: LangGraph tool runtime containing the current agent state.
 
     Returns:
-        File content as text when the file exists in runtime state and can be
-        decoded; otherwise None.
+        File content when the file exists as UTF-8 text in runtime state;
+        otherwise None.
     """
     if not isinstance(runtime.state, dict):
         return None
@@ -98,6 +98,8 @@ def read_runtime_file(file_path: str, runtime: ToolRuntime) -> str | None:
             continue
         value = files[candidate]
         if isinstance(value, dict):
+            if value.get("encoding", "utf-8") != "utf-8":
+                return None
             content = value.get("content")
             if isinstance(content, str):
                 return content

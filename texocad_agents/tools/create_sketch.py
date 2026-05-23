@@ -24,7 +24,7 @@ from texocad_agents.tools._runtime import (
     create_revision,
     error_message,
     revision_artifact,
-    tool_context,
+    get_tool_context,
 )
 
 SKETCH_CONTENT_TYPE = "image/png"
@@ -67,7 +67,7 @@ def create_sketch(
     if validation_error:
         return error_message(runtime, validation_error)
 
-    ctx = tool_context(runtime)
+    ctx = get_tool_context(runtime)
     if ctx is None:
         return error_message(
             runtime,
