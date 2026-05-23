@@ -65,18 +65,11 @@ def _require_env(name: str) -> str:
 CLERK_JWKS_URL = _require_env("CLERK_JWKS_URL")
 CLERK_ISSUER = _require_env("CLERK_ISSUER")
 ALLOWED_TOKEN_AZP = _require_env("ALLOWED_TOKEN_AZP")
-CLERK_AUDIENCE = _require_env("CLERK_AUDIENCE")
 
 _jwks = jwt.PyJWKClient(CLERK_JWKS_URL, cache_keys=True)
 _allowed_azp = {part.strip() for part in ALLOWED_TOKEN_AZP.split(",") if part.strip()}
 if not _allowed_azp:
     raise RuntimeError("ALLOWED_TOKEN_AZP must contain at least one origin")
-_audience_parts = [part.strip() for part in CLERK_AUDIENCE.split(",") if part.strip()]
-if not _audience_parts:
-    raise RuntimeError("CLERK_AUDIENCE must contain at least one audience")
-_audience: str | list[str] = (
-    _audience_parts[0] if len(_audience_parts) == 1 else _audience_parts
-)
 
 auth = Auth()
 
@@ -255,8 +248,8 @@ def verify_token(token: str) -> tuple[str, dict[str, object]]:
     Raises:
         Auth.exceptions.HTTPException: If required claims, token version,
             authorized party, session status, or subscription checks fail.
-        jwt.PyJWTError: If signature, issuer, audience, or timestamp validation
-            fails in PyJWT.
+        jwt.PyJWTError: If signature, issuer, or timestamp validation fails in
+            PyJWT.
     """
 
     signing_key = _jwks.get_signing_key_from_jwt(token)
@@ -264,12 +257,11 @@ def verify_token(token: str) -> tuple[str, dict[str, object]]:
         token,
         signing_key.key,
         algorithms=["RS256"],
-        audience=_audience,
         issuer=CLERK_ISSUER,
         leeway=JWT_LEEWAY_SECONDS,
         options={
             "require": list(REQUIRED_CLAIMS),
-            "verify_aud": True,
+            "verify_aud": False,
         },
     )
 
