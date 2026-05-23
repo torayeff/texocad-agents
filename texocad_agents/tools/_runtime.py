@@ -1,3 +1,4 @@
+import posixpath
 from dataclasses import dataclass
 
 from langchain_core.messages import ToolMessage
@@ -11,8 +12,7 @@ from texocad_agents.storage import (
     ensure_design,
     get_design_tables,
     get_storage_container,
-    save_design_revision_blobs,
-    user_scope_hash,
+    scope_hash,
 )
 
 
@@ -25,11 +25,11 @@ class ToolContext:
     metadata: dict
 
 
-def resolve_tool_context(runtime: ToolRuntime) -> ToolContext | None:
+def tool_context(runtime: ToolRuntime) -> ToolContext | None:
     """Extract authenticated owner/thread context from runtime config.
 
     Returns None if owner_id or thread_id are missing (caller should
-    return an error_tool_message).
+    return an error_message). One design per thread: design_id == thread_id.
     """
     configurable = runtime.config.get("configurable", {})
     metadata = runtime.config.get("metadata", {})
@@ -56,7 +56,6 @@ def resolve_tool_context(runtime: ToolRuntime) -> ToolContext | None:
 
 
 def blob_payload(blob: StoredBlob) -> dict:
-    """Convert a StoredBlob to a camelCase dict for artifact payloads."""
     return {
         "filename": blob.filename,
         "blobName": blob.blob_name,
@@ -71,64 +70,49 @@ def normalize_path(file_path: str) -> str:
     return f"/{file_path}"
 
 
-def runtime_files(runtime: ToolRuntime) -> dict:
-    if not isinstance(runtime.state, dict):
-        return {}
-
-    files = runtime.state.get("files", {})
-    if isinstance(files, dict):
-        return files
-    return {}
-
-
 def read_runtime_file(file_path: str, runtime: ToolRuntime) -> str | None:
-    files = runtime_files(runtime)
+    if not isinstance(runtime.state, dict):
+        return None
+    files = runtime.state.get("files", {})
+    if not isinstance(files, dict):
+        return None
 
     for candidate in (file_path, normalize_path(file_path)):
-        if candidate in files:
-            return file_text(files[candidate])
+        if candidate not in files:
+            continue
+        value = files[candidate]
+        if isinstance(value, str):
+            return value
+        if isinstance(value, bytes):
+            return value.decode("utf-8")
+        if isinstance(value, dict):
+            for key in ("content", "text", "data"):
+                content = value.get(key)
+                if isinstance(content, str):
+                    return content
+        content = getattr(value, "content", None)
+        if isinstance(content, str):
+            return content
     return None
 
 
-def file_text(value: object) -> str | None:
-    if isinstance(value, str):
-        return value
-    if isinstance(value, bytes):
-        return value.decode("utf-8")
-    if isinstance(value, dict):
-        for key in ("content", "text", "data"):
-            content = value.get(key)
-            if isinstance(content, str):
-                return content
-    content = getattr(value, "content", None)
-    if isinstance(content, str):
-        return content
-    return None
+def authorize_blob_access(blob_path: str, ctx: ToolContext) -> str | None:
+    """Return the resolved blob_name if the caller owns it, else None.
 
-
-def authorize_blob_access(
-    blob_path: str,
-    owner_id: str,
-    thread_id: str,
-    *,
-    allow_designs: bool = False,
-) -> str | None:
-    """Return the resolved blob_name if the owner may access it, else None."""
-    blob_name = blob_path_from_url(blob_path)
-    user_scope = f"users/{user_scope_hash(owner_id)}"
-    allowed_prefixes: tuple[str, ...] = (
-        f"{user_scope}/threads/{thread_id}/",
-        f"{user_scope}/uploads/",
-    )
-    if allow_designs:
-        allowed_prefixes = allowed_prefixes + (f"{user_scope}/designs/",)
-
-    if not blob_name.startswith(allowed_prefixes):
+    Per-user boundary: any blob under `users/<scope_hash(owner_id)>/` is
+    accessible. Path traversal (`..`) and absolute paths are rejected.
+    Cross-user access is not supported.
+    """
+    raw_name = blob_path_from_url(blob_path)
+    blob_name = posixpath.normpath(raw_name)
+    if blob_name.startswith("/") or ".." in blob_name.split("/"):
+        return None
+    if not blob_name.startswith(f"users/{scope_hash(ctx.owner_id)}/"):
         return None
     return blob_name
 
 
-def error_tool_message(runtime: ToolRuntime, content: str) -> Command:
+def error_message(runtime: ToolRuntime, content: str) -> Command:
     return Command(
         update={
             "messages": [
@@ -170,26 +154,14 @@ def create_revision(
     return tables, storage_container, design_revision, revision_number
 
 
-def finalize_revision(
-    tables,
-    design_revision: dict,
-    source: StoredBlob,
-    exports: list[StoredBlob],
-) -> dict:
-    """Persist source and export blob metadata on the revision."""
-    return save_design_revision_blobs(
-        tables.design_revisions, design_revision, source, exports
-    )
-
-
-def revision_artifact_payload(
+def revision_artifact(
     *,
     artifact_type: str,
     design_id: str,
     design_revision: dict,
     source_blob: StoredBlob,
     exports: list[StoredBlob],
-    previews: list[StoredBlob],
+    renders: list[StoredBlob],
     thread_id: str,
     run_id: str | None,
 ) -> dict:
@@ -200,7 +172,7 @@ def revision_artifact_payload(
         "revisionNumber": int(design_revision["revision_number"]),
         "source": blob_payload(source_blob),
         "exports": [blob_payload(export) for export in exports],
-        "previews": [blob_payload(preview) for preview in previews],
+        "renders": [blob_payload(render) for render in renders],
         "createdByThreadId": thread_id,
     }
     if run_id:

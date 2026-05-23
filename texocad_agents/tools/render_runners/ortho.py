@@ -1,3 +1,4 @@
+import io
 import json
 import math
 import os
@@ -6,32 +7,14 @@ from pathlib import Path
 import cadquery as cq
 import fitz
 import numpy as np
-from common import find_step
+from _shared import EPS, ORTHO_PROJECTIONS, VIEW_UPS, find_step
 from PIL import Image, ImageChops
 
 SIZE = 1024
 PADDING = 32
 SVG_MARGIN = 16
 RENDER_OVERSAMPLE = 2
-CONFIG_FILE = "preview_config.json"
-VIEWS: dict[str, tuple[float, float, float]] = {
-    "iso": (100, -100, 80),
-    "front": (0, -100, 0),
-    "back": (0, 100, 0),
-    "left": (-100, 0, 0),
-    "right": (100, 0, 0),
-    "top": (0, 0, 100),
-    "bottom": (0, 0, -100),
-}
-DEFAULT_UPS: dict[str, tuple[float, float, float]] = {
-    "iso": (0.0, 0.0, 1.0),
-    "front": (0.0, 0.0, 1.0),
-    "back": (0.0, 0.0, 1.0),
-    "left": (0.0, 0.0, 1.0),
-    "right": (0.0, 0.0, 1.0),
-    "top": (0.0, 1.0, 0.0),
-    "bottom": (0.0, -1.0, 0.0),
-}
+CONFIG_FILE = "render_config.json"
 
 
 def main() -> None:
@@ -40,23 +23,26 @@ def main() -> None:
     config = json.loads(Path(CONFIG_FILE).read_text())
     step_path = find_step(out_dir, config.get("step_filename", ""))
     image_path = render_step(step_path, out_dir, config)
-    print(f"preview: {image_path.name}")
+    print(f"render: {image_path.name}")
 
 
 def render_step(step_file: Path, out_dir: Path, config: dict) -> Path:
     camera = config.get("camera")
-    up = config.get("up")
     if camera is not None:
         view_name = "custom"
-        projection = tuple(float(v) for v in camera)
-        up_vec = tuple(float(v) for v in up) if up else (0.0, 0.0, 1.0)
+        position = tuple(float(v) for v in camera)
+        target = tuple(float(v) for v in (config.get("target") or (0.0, 0.0, 0.0)))
+        projection = tuple(p - t for p, t in zip(position, target))
+        if math.sqrt(sum(component * component for component in projection)) < EPS:
+            projection = (1.0, -1.0, 0.8)
+        up_vec = tuple(float(v) for v in (config.get("up") or (0.0, 0.0, 1.0)))
     else:
         view_name = config.get("view", "iso").lower()
-        if view_name not in VIEWS:
-            allowed = ", ".join(sorted(VIEWS))
+        if view_name not in ORTHO_PROJECTIONS:
+            allowed = ", ".join(sorted(ORTHO_PROJECTIONS))
             raise ValueError(f"unknown view {view_name!r}; expected one of: {allowed}")
-        projection = VIEWS[view_name]
-        up_vec = DEFAULT_UPS[view_name]
+        projection = ORTHO_PROJECTIONS[view_name]
+        up_vec = VIEW_UPS[view_name]
 
     shape = cq.importers.importStep(str(step_file))
 
@@ -93,7 +79,7 @@ def svg_to_png(svg_path: Path, png_path: Path, rotation_deg: float) -> None:
         height = max(float(page.rect.height), 1.0)
         scale = (SIZE * RENDER_OVERSAMPLE) / max(width, height)
         pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
-        raw = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
+        raw = Image.open(io.BytesIO(pixmap.tobytes("png"))).convert("RGB")
         if abs(rotation_deg) > 0.05:
             raw = raw.rotate(
                 rotation_deg,

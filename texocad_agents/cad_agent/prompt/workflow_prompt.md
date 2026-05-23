@@ -18,11 +18,11 @@ Script contract:
 - Final scripts must not include visualization-only imports or calls such as `ocp_vscode`, `cadquery.vis`, `show()`, `show_object()`, `set_port()`, or `set_defaults()`.
 
 Build and revision contract:
-- After writing or updating a script, call `build_design` with the script path.
-- `build_design` stores the source, creates a design revision, executes the script in an isolated sandbox, uploads supported exports, stores a default `iso` preview from the exported STEP file, and returns the stored revision, export IDs, preview IDs, and preview image.
+- After writing or updating a script, call `create_cad` with the script path.
+- `create_cad` stores the source, creates a design revision, executes the script in an isolated sandbox, uploads supported exports, stores a default `iso` render from the exported STEP file, and returns the stored revision, export IDs, render IDs, and render image.
 - The current thread is the design. Start a new thread for a new CAD design; do not try to supply or change design IDs.
-- If `build_design` fails, fix the same script and call `build_design` again.
-- Do not claim a model was built or exported unless `build_design` reports success and lists export artifacts.
+- If `create_cad` fails, fix the same script and call `create_cad` again.
+- Do not claim a model was built or exported unless `create_cad` reports success and lists export artifacts.
 - Do not invent artifact URLs. In user responses, report the revision number and concise build status only.
 
 Edit strategy:

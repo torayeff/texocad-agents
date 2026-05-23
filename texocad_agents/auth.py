@@ -40,26 +40,29 @@ METADATA_ALLOWED_MODELS = "allowed_models"
 METADATA_MODEL = "model"
 METADATA_OWNER = "owner"
 
-CLERK_JWKS_URL = os.getenv("CLERK_JWKS_URL")
-CLERK_ISSUER = os.getenv("CLERK_ISSUER")
-ALLOWED_TOKEN_AZP = os.getenv("ALLOWED_TOKEN_AZP")
-if not CLERK_JWKS_URL:
-    raise RuntimeError("CLERK_JWKS_URL is not set")
-if not CLERK_ISSUER:
-    raise RuntimeError("CLERK_ISSUER is not set")
-if not ALLOWED_TOKEN_AZP:
-    raise RuntimeError("ALLOWED_TOKEN_AZP is not set")
+
+def _require_env(name: str) -> str:
+    value = os.getenv(name)
+    if not value:
+        raise RuntimeError(f"{name} is not set")
+    return value
+
+
+CLERK_JWKS_URL = _require_env("CLERK_JWKS_URL")
+CLERK_ISSUER = _require_env("CLERK_ISSUER")
+ALLOWED_TOKEN_AZP = _require_env("ALLOWED_TOKEN_AZP")
+CLERK_AUDIENCE = _require_env("CLERK_AUDIENCE")
 
 _jwks = jwt.PyJWKClient(CLERK_JWKS_URL, cache_keys=True)
 _allowed_azp = {part.strip() for part in ALLOWED_TOKEN_AZP.split(",") if part.strip()}
 if not _allowed_azp:
     raise RuntimeError("ALLOWED_TOKEN_AZP must contain at least one origin")
-_audience_parts = [
-    part.strip() for part in os.getenv("CLERK_AUDIENCE", "").split(",") if part.strip()
-]
-_audience = _audience_parts[0] if len(_audience_parts) == 1 else _audience_parts
-if not _audience:
-    _audience = None
+_audience_parts = [part.strip() for part in CLERK_AUDIENCE.split(",") if part.strip()]
+if not _audience_parts:
+    raise RuntimeError("CLERK_AUDIENCE must contain at least one audience")
+_audience: str | list[str] = (
+    _audience_parts[0] if len(_audience_parts) == 1 else _audience_parts
+)
 
 auth = Auth()
 
@@ -157,7 +160,7 @@ def verify_token(token: str) -> tuple[str, dict[str, object]]:
         leeway=JWT_LEEWAY_SECONDS,
         options={
             "require": list(REQUIRED_CLAIMS),
-            "verify_aud": _audience is not None,
+            "verify_aud": True,
         },
     )
 
@@ -186,7 +189,7 @@ def check_subscription(payload: dict[str, object]) -> None:
     pla = payload.get(ACCESS_CLAIM_PLANS)
     if not isinstance(pla, str):
         _forbidden("Active subscription required")
-    plans = set(_csv_parts(pla))
+    plans = {part.strip() for part in pla.split(",") if part.strip()}
     if plans.isdisjoint(ALLOWED_PLAN_SCOPES):
         _forbidden("Active subscription required")
 
@@ -221,7 +224,3 @@ def _unauthorized(detail: str) -> NoReturn:
 
 def _forbidden(detail: str) -> NoReturn:
     raise Auth.exceptions.HTTPException(status_code=403, detail=detail)
-
-
-def _csv_parts(raw: str) -> list[str]:
-    return [part.strip() for part in raw.split(",") if part.strip()]

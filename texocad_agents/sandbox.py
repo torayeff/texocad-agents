@@ -1,3 +1,4 @@
+import logging
 import posixpath
 import time
 from dataclasses import dataclass
@@ -11,6 +12,8 @@ from daytona import (
     Image,
     Resources,
 )
+
+logger = logging.getLogger(__name__)
 
 MAX_PROCESS_OUTPUT_CHARS = 20_000
 
@@ -34,9 +37,6 @@ class SandboxConfig:
     network_block_all: bool = True
 
 
-SANDBOX_CONFIG = SandboxConfig()
-
-
 @dataclass(frozen=True)
 class SandboxRunResult:
     exit_code: int
@@ -52,7 +52,7 @@ class SandboxCommand:
     support_files: dict[str, bytes] | None = None
 
 
-def ensure_snapshot(daytona: Daytona, config: SandboxConfig = SANDBOX_CONFIG) -> None:
+def ensure_snapshot(daytona: Daytona, config: SandboxConfig) -> None:
     try:
         snapshot = daytona.snapshot.get(config.snapshot_name)
     except Exception as exc:
@@ -89,11 +89,12 @@ def ensure_snapshot(daytona: Daytona, config: SandboxConfig = SANDBOX_CONFIG) ->
 def run_python(
     code: str,
     out_dir: Path,
-    config: SandboxConfig = SANDBOX_CONFIG,
+    config: SandboxConfig | None = None,
     *,
     support_files: dict[str, bytes] | None = None,
     post_run: SandboxCommand | None = None,
 ) -> SandboxRunResult:
+    config = config or SandboxConfig()
     daytona = Daytona()
     ensure_snapshot(daytona, config)
     sandbox = None
@@ -117,11 +118,7 @@ def run_python(
         sandbox.fs.upload_file(
             code.encode("utf-8"), posixpath.join(work_dir, "main.py")
         )
-        for filename, contents in sorted((support_files or {}).items()):
-            sandbox.fs.upload_file(
-                contents,
-                posixpath.join(work_dir, posixpath.basename(filename)),
-            )
+        _upload_files(sandbox, work_dir, support_files)
 
         response = sandbox.process.exec(
             "python main.py 2>&1",
@@ -137,11 +134,7 @@ def run_python(
             )
 
         if post_run is not None:
-            for filename, contents in sorted((post_run.support_files or {}).items()):
-                sandbox.fs.upload_file(
-                    contents,
-                    posixpath.join(work_dir, posixpath.basename(filename)),
-                )
+            _upload_files(sandbox, work_dir, post_run.support_files)
             sandbox.fs.upload_file(
                 post_run.contents,
                 posixpath.join(work_dir, posixpath.basename(post_run.filename)),
@@ -182,8 +175,24 @@ def run_python(
         if sandbox is not None:
             try:
                 sandbox.delete(timeout=60)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(
+                    "Failed to delete sandbox %r: %s",
+                    getattr(sandbox, "id", None),
+                    exc,
+                )
+
+
+def _upload_files(
+    sandbox: object,
+    work_dir: str,
+    files: dict[str, bytes] | None,
+) -> None:
+    for filename, contents in sorted((files or {}).items()):
+        sandbox.fs.upload_file(
+            contents,
+            posixpath.join(work_dir, posixpath.basename(filename)),
+        )
 
 
 def _snapshot_state(snapshot: object) -> str:

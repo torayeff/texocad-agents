@@ -5,12 +5,9 @@
     "."
   ],
   "graphs": {
-    "texocad": "./texocad_agents/design_agent/agent.py:create_design_agent",
+    "texocad": "./texocad_agents/cad_agent/agent.py:create_cad_agent",
     "sketch": "./texocad_agents/sketch_agent/agent.py:create_sketch_agent"
   },
-  "dockerfile_lines": [
-    "RUN apk add --no-cache libglvnd libxrender"
-  ],
   "env": ".env",
   "auth": {
     "path": "./texocad_agents/auth.py:auth"

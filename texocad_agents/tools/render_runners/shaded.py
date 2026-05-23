@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Sequence
 
 import numpy as np
-from common import find_step
+from _shared import EPS, SHADED_DIRECTIONS, VIEW_UPS, find_step
 from OCP.BRep import BRep_Tool
 from OCP.BRepMesh import BRepMesh_IncrementalMesh
 from OCP.Quantity import Quantity_Color
@@ -14,7 +14,12 @@ from OCP.STEPCAFControl import STEPCAFControl_Reader
 from OCP.TCollection import TCollection_ExtendedString
 from OCP.TDF import TDF_LabelSequence
 from OCP.TDocStd import TDocStd_Document
-from OCP.TopAbs import TopAbs_FACE, TopAbs_REVERSED, TopAbs_SOLID
+from OCP.TopAbs import (
+    TopAbs_FACE,
+    TopAbs_REVERSED,
+    TopAbs_SHELL,
+    TopAbs_SOLID,
+)
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS
@@ -22,7 +27,6 @@ from OCP.XCAFApp import XCAFApp_Application
 from OCP.XCAFDoc import XCAFDoc_ColorGen, XCAFDoc_ColorSurf, XCAFDoc_DocumentTool
 from PIL import Image, ImageDraw
 
-EPS = 1e-5
 FOV_DEGREES = 42.0
 SIZE = 1024
 PADDING = 32
@@ -30,26 +34,7 @@ DEFAULT_SIZE = (SIZE, SIZE)
 DEFAULT_COLOR = np.array([0xCF, 0xD6, 0xDF], dtype=np.float32) / 255.0
 BACKGROUND_COLOR = np.array([255, 255, 255], dtype=np.uint8)
 EDGE_COLOR = np.array([0x10, 0x18, 0x20], dtype=np.float32)
-CONFIG_FILE = "preview_config.json"
-
-VIEW_DIRECTIONS: dict[str, tuple[float, float, float]] = {
-    "iso": (1.0, -1.0, 0.8),
-    "front": (0.0, -1.0, 0.0),
-    "back": (0.0, 1.0, 0.0),
-    "top": (0.0, -EPS, 1.0),
-    "bottom": (0.0, -EPS, -1.0),
-    "left": (-1.0, 0.0, 0.0),
-    "right": (1.0, 0.0, 0.0),
-}
-PRESET_UPS: dict[str, tuple[float, float, float]] = {
-    "iso": (0.0, 0.0, 1.0),
-    "front": (0.0, 0.0, 1.0),
-    "back": (0.0, 0.0, 1.0),
-    "top": (0.0, 1.0, 0.0),
-    "bottom": (0.0, -1.0, 0.0),
-    "left": (0.0, 0.0, 1.0),
-    "right": (0.0, 0.0, 1.0),
-}
+CONFIG_FILE = "render_config.json"
 
 
 @dataclass(frozen=True)
@@ -95,14 +80,14 @@ def main() -> None:
         )
     else:
         view_name = config.get("view", "iso").lower()
-        if view_name not in VIEW_DIRECTIONS:
-            known = ", ".join(sorted(VIEW_DIRECTIONS))
+        if view_name not in SHADED_DIRECTIONS:
+            known = ", ".join(sorted(SHADED_DIRECTIONS))
             raise ValueError(f"Unknown view {view_name!r}. Use one of: {known}.")
         camera = preset_camera(view_name, geometry.triangles, DEFAULT_SIZE)
 
-    output_path = out_dir / f"{step_path.stem}_{view_name}_render.png"
+    output_path = out_dir / f"{step_path.stem}_{view_name}_shaded.png"
     render_png(geometry, camera, output_path, DEFAULT_SIZE, draw_edges=True)
-    print(f"preview: {output_path.name}")
+    print(f"render: {output_path.name}")
 
 
 def normalize(vector: np.ndarray) -> np.ndarray:
@@ -200,10 +185,35 @@ def load_step_geometry(step_file: Path) -> RenderGeometry:
     shape_tool.GetFreeShapes(labels)
     if labels.Length() == 0:
         raise ValueError(f"No shapes found in {step_file}.")
-    root_shape = shape_tool.GetShape_s(labels.Value(1))
 
-    BRepMesh_IncrementalMesh(root_shape, 0.001, True, 0.5, True)
+    triangles: list[Triangle] = []
+    edges: list[EdgeSegment] = []
 
+    for label_index in range(1, labels.Length() + 1):
+        root_shape = shape_tool.GetShape_s(labels.Value(label_index))
+        BRepMesh_IncrementalMesh(root_shape, 0.001, True, 0.5, True)
+        root_triangles, root_edges = _geometry_from_root(
+            root_shape, color_tool, shape_tool
+        )
+        triangles.extend(root_triangles)
+        edges.extend(root_edges)
+
+    if not triangles:
+        raise ValueError(f"No renderable faces found in {step_file}.")
+    return RenderGeometry(triangles=triangles, edges=edges)
+
+
+def _geometry_from_root(
+    root_shape: object,
+    color_tool: object,
+    shape_tool: object,
+) -> tuple[list[Triangle], list[EdgeSegment]]:
+    """Triangulate the best-available bodies under a single root shape.
+
+    Falls back from SOLID → SHELL → FACE so multi-root assemblies, shell-only
+    STEPs, and face-only STEPs all render. SOLID gets the XDE color lookup;
+    SHELL/FACE roots use DEFAULT_COLOR.
+    """
     triangles: list[Triangle] = []
     edges: list[EdgeSegment] = []
 
@@ -215,17 +225,28 @@ def load_step_geometry(step_file: Path) -> RenderGeometry:
         triangles.extend(geometry.triangles)
         edges.extend(geometry.edges)
         solid_explorer.Next()
+    if triangles:
+        return triangles, edges
 
-    if not triangles:
-        raise ValueError(f"No renderable faces found in {step_file}.")
-    return RenderGeometry(triangles=triangles, edges=edges)
+    shell_explorer = TopExp_Explorer(root_shape, TopAbs_SHELL)
+    while shell_explorer.More():
+        shell = shell_explorer.Current()
+        geometry = face_geometry(shell, DEFAULT_COLOR)
+        triangles.extend(geometry.triangles)
+        edges.extend(geometry.edges)
+        shell_explorer.Next()
+    if triangles:
+        return triangles, edges
+
+    geometry = face_geometry(root_shape, DEFAULT_COLOR)
+    return geometry.triangles, geometry.edges
 
 
 def preset_camera(
     view: str, triangles: list[Triangle], size: tuple[int, int]
 ) -> Camera:
-    direction = normalize(np.array(VIEW_DIRECTIONS[view], dtype=np.float64))
-    up = np.array(PRESET_UPS[view], dtype=np.float64)
+    direction = normalize(np.array(SHADED_DIRECTIONS[view], dtype=np.float64))
+    up = np.array(VIEW_UPS[view], dtype=np.float64)
     return _fit_camera(direction=direction, up=up, triangles=triangles, size=size)
 
 

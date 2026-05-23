@@ -10,16 +10,14 @@ requires-python = ">=3.12"
 dependencies = [
     "azure-data-tables",
     "azure-storage-blob",
-    "cadquery",
     "daytona",
     "deepagents",
     "langchain",
-    "langchain-anthropic",
-    "langchain-google-genai",
     "langchain-openai",
-    "openai",
     "langgraph",
     "langgraph-sdk",
+    "openai",
+    "pillow",
     "pymupdf",
     "PyJWT[crypto]",
 ]
@@ -29,12 +27,9 @@ dev = [
     "langgraph-api",
     "langgraph-cli[inmem]",
 ]
-all = [
-    "texocad[dev]",
-]
 
 [tool.setuptools.packages.find]
 include = ["texocad_agents*"]
 
 [tool.setuptools.package-data]
-"texocad_agents.design_agent" = ["prompt/*.md"]
+"texocad_agents.cad_agent" = ["prompt/*.md"]
