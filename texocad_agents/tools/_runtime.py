@@ -19,6 +19,16 @@ from texocad_agents.storage import (
 
 @dataclass(frozen=True)
 class ToolContext:
+    """Authenticated context for a tool invocation.
+
+    Attributes:
+        owner_id: Authenticated user identity from LangGraph config.
+        thread_id: LangGraph thread identifier for the current conversation.
+        design_id: Stable design identifier. This currently matches `thread_id`.
+        run_id: Optional LangGraph run identifier.
+        metadata: Runtime metadata passed with the graph invocation.
+    """
+
     owner_id: str
     thread_id: str
     design_id: str
@@ -29,8 +39,15 @@ class ToolContext:
 def tool_context(runtime: ToolRuntime) -> ToolContext | None:
     """Extract authenticated owner/thread context from runtime config.
 
-    Returns None if owner_id or thread_id are missing (caller should
-    return an error_message). One design per thread: design_id == thread_id.
+    One design is associated with each LangGraph thread, so `design_id` is
+    currently the same value as `thread_id`.
+
+    Args:
+        runtime: LangGraph tool runtime for the current tool call.
+
+    Returns:
+        Tool context when `owner_id` and `thread_id` are present; otherwise
+        None. Callers should return an `error_message` when this is None.
     """
     configurable = runtime.config.get("configurable", {})
     metadata = runtime.config.get("metadata", {})
@@ -57,6 +74,17 @@ def tool_context(runtime: ToolRuntime) -> ToolContext | None:
 
 
 def read_runtime_file(file_path: str, runtime: ToolRuntime) -> str | None:
+    """Read a text file from the agent runtime filesystem state.
+
+    Args:
+        file_path: Absolute or relative path to the file in the agent
+            filesystem.
+        runtime: LangGraph tool runtime containing the current agent state.
+
+    Returns:
+        File content as text when the file exists in runtime state and can be
+        decoded; otherwise None.
+    """
     if not isinstance(runtime.state, dict):
         return None
     files = runtime.state.get("files", {})
@@ -64,31 +92,31 @@ def read_runtime_file(file_path: str, runtime: ToolRuntime) -> str | None:
         return None
 
     normalized = file_path if file_path.startswith("/") else f"/{file_path}"
-    for candidate in (file_path, normalized):
+    candidates = (file_path,) if normalized == file_path else (file_path, normalized)
+    for candidate in candidates:
         if candidate not in files:
             continue
         value = files[candidate]
-        if isinstance(value, str):
-            return value
-        if isinstance(value, bytes):
-            return value.decode("utf-8")
         if isinstance(value, dict):
-            for key in ("content", "text", "data"):
-                content = value.get(key)
-                if isinstance(content, str):
-                    return content
-        content = getattr(value, "content", None)
-        if isinstance(content, str):
-            return content
+            content = value.get("content")
+            if isinstance(content, str):
+                return content
     return None
 
 
 def authorize_blob_access(blob_path: str, ctx: ToolContext) -> str | None:
-    """Return the resolved blob_name if the caller owns it, else None.
+    """Authorize access to a user-scoped blob path.
 
     Per-user boundary: any blob under `users/<scope_hash(owner_id)>/` is
-    accessible. Path traversal (`..`) and absolute paths are rejected.
-    Cross-user access is not supported.
+    accessible. Path traversal (`..`), absolute paths, and cross-user access
+    are rejected.
+
+    Args:
+        blob_path: Blob path or URL provided to a tool.
+        ctx: Authenticated tool context for the current caller.
+
+    Returns:
+        Normalized blob name when the caller owns it; otherwise None.
     """
     raw_name = blob_path_from_url(blob_path)
     blob_name = posixpath.normpath(raw_name)
@@ -100,6 +128,15 @@ def authorize_blob_access(blob_path: str, ctx: ToolContext) -> str | None:
 
 
 def error_message(runtime: ToolRuntime, content: str) -> Command:
+    """Build a LangGraph command containing an error tool message.
+
+    Args:
+        runtime: LangGraph tool runtime for the current tool call.
+        content: Error text to return to the agent.
+
+    Returns:
+        Command that appends an error-status `ToolMessage`.
+    """
     return Command(
         update={
             "messages": [
@@ -118,7 +155,12 @@ def create_revision(
 ) -> tuple[object, object, dict, int]:
     """Ensure design exists and create a new revision.
 
-    Returns (tables, storage_container, design_revision, revision_number).
+    Args:
+        ctx: Authenticated tool context for the current caller.
+        title: Human-readable design title used when creating the design.
+
+    Returns:
+        Tuple of `(tables, storage_container, design_revision, revision_number)`.
     """
     tables = get_design_tables()
     storage_container = get_storage_container()
@@ -152,7 +194,21 @@ def revision_artifact(
     thread_id: str,
     run_id: str | None,
 ) -> dict:
-    """Build the texocad_artifact dict attached to ToolMessage additional_kwargs."""
+    """Build artifact metadata for a design revision tool message.
+
+    Args:
+        artifact_type: Type identifier for the produced artifact.
+        design_id: Stable design identifier for the current thread.
+        design_revision: Persisted design revision row.
+        source_blob: Stored source-code blob for the revision.
+        exports: Stored export blobs, such as STEP files.
+        renders: Stored render image blobs.
+        thread_id: LangGraph thread identifier that created the artifact.
+        run_id: Optional LangGraph run identifier that created the artifact.
+
+    Returns:
+        `texocad_artifact` payload suitable for `ToolMessage.additional_kwargs`.
+    """
     payload = {
         "type": artifact_type,
         "designId": design_id,
