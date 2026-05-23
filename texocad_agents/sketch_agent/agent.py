@@ -28,5 +28,5 @@ async def create_sketch_agent(config: RunnableConfig) -> CompiledStateGraph:
         model=model,
         tools=[read_attachment, create_sketch],
         system_prompt=SYSTEM_PROMPT,
-        name="TexoCAD Sketch",
+        name="Sketch Agent",
     )
