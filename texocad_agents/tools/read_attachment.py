@@ -1,3 +1,5 @@
+"""Read authorized attachment blobs as text, images, or rendered PDF pages."""
+
 import base64
 import io
 import mimetypes
@@ -41,7 +43,9 @@ def read_attachment(attachment_path: str, runtime: ToolRuntime) -> Command | lis
 
     Args:
         attachment_path: Blob path or URL for the uploaded attachment.
+        runtime: LangGraph tool runtime for the current tool call.
     """
+
     ctx = get_tool_context(runtime)
     if ctx is None:
         return error_message(
@@ -99,6 +103,16 @@ def read_attachment(attachment_path: str, runtime: ToolRuntime) -> Command | lis
 
 
 def _read_pdf(blob_name: str, raw_bytes: bytes) -> list | str:
+    """Render a PDF attachment into image content blocks.
+
+    Args:
+        blob_name: Authorized blob name for diagnostics.
+        raw_bytes: Raw PDF bytes.
+
+    Returns:
+        Content blocks for rendered pages, or an error message string.
+    """
+
     if not raw_bytes.startswith(PDF_MAGIC):
         return f"Refused: '{blob_name}' is not a valid PDF (missing %PDF- header)."
 
@@ -154,6 +168,17 @@ def _validate_attachment_size(
     mime_type: str | None,
     blob_size: int,
 ) -> str | None:
+    """Validate attachment size against type-specific limits.
+
+    Args:
+        blob_name: Authorized blob name for diagnostics.
+        mime_type: Detected MIME type, when known.
+        blob_size: Blob size in bytes.
+
+    Returns:
+        Error message when the blob exceeds its limit, otherwise None.
+    """
+
     max_bytes = MAX_TEXT_BYTES
     if mime_type == "application/pdf":
         max_bytes = MAX_PDF_BYTES
@@ -170,6 +195,17 @@ def _validate_attachment_size(
 
 
 def _read_image_if_supported(blob_name: str, raw_bytes: bytes) -> list | str | None:
+    """Return image content blocks when bytes contain a supported image.
+
+    Args:
+        blob_name: Authorized blob name for diagnostics.
+        raw_bytes: Raw attachment bytes.
+
+    Returns:
+        Content blocks for supported images, an error string for unsupported
+        image formats, or None when bytes are not an image.
+    """
+
     try:
         image = Image.open(io.BytesIO(raw_bytes))
         image.verify()

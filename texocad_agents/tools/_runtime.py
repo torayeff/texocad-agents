@@ -1,3 +1,5 @@
+"""Shared helpers for authenticated LangGraph tool runtime state."""
+
 import posixpath
 from dataclasses import dataclass
 

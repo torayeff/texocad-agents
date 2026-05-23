@@ -1,3 +1,5 @@
+"""Render STEP files as hidden-line orthographic PNG images."""
+
 import io
 import json
 import math
@@ -19,6 +21,8 @@ WHITE = (255, 255, 255)
 
 
 def main() -> None:
+    """Run the orthographic render script from sandbox configuration."""
+
     out_dir = Path(os.environ["TEXOCAD_OUTPUT_DIR"])
     out_dir.mkdir(parents=True, exist_ok=True)
     config = json.loads(Path(CONFIG_FILE).read_text())
@@ -28,6 +32,20 @@ def main() -> None:
 
 
 def render_step(step_file: Path, out_dir: Path, config: dict) -> Path:
+    """Render a STEP file as a hidden-line orthographic PNG.
+
+    Args:
+        step_file: STEP file to render.
+        out_dir: Output directory for the rendered PNG.
+        config: Render configuration containing a preset view or custom camera.
+
+    Returns:
+        Path to the rendered PNG file.
+
+    Raises:
+        ValueError: If the requested preset view is unknown.
+    """
+
     camera = config.get("camera")
     if camera is not None:
         view_name = "custom"
@@ -73,6 +91,14 @@ def render_step(step_file: Path, out_dir: Path, config: dict) -> Path:
 
 
 def svg_to_png(svg_path: Path, png_path: Path, rotation_deg: float) -> None:
+    """Rasterize, rotate, crop, and center a CadQuery SVG render.
+
+    Args:
+        svg_path: Source SVG file path.
+        png_path: Destination PNG file path.
+        rotation_deg: Counter-clockwise rotation to apply before centering.
+    """
+
     document = fitz.open(stream=svg_path.read_bytes(), filetype="svg")
     try:
         page = document[0]
@@ -94,6 +120,17 @@ def svg_to_png(svg_path: Path, png_path: Path, rotation_deg: float) -> None:
 
 
 def trim_and_center(image: Image.Image, size: int, padding: int) -> Image.Image:
+    """Crop non-white content and center it on a square white canvas.
+
+    Args:
+        image: Source image to trim.
+        size: Output canvas width and height in pixels.
+        padding: Minimum padding around scaled content.
+
+    Returns:
+        Centered RGB image.
+    """
+
     white = Image.new(image.mode, image.size, WHITE)
     bbox = ImageChops.difference(image, white).getbbox()
     if bbox is None:
@@ -121,6 +158,13 @@ def compute_rotation_degrees(
     so OCP picks the in-plane X axis from a deterministic heuristic that ignores
     `up`. We measure the signed angle between cadquery's chosen plane-X and the
     desired right vector (up x projection_dir) and rotate by its negative.
+
+    Args:
+        projection_dir: Camera projection direction used by CadQuery.
+        up: Desired world-space up vector.
+
+    Returns:
+        Rotation angle in degrees.
     """
     N = np.array(projection_dir, dtype=float)
     norm = float(np.linalg.norm(N))
@@ -151,7 +195,14 @@ def _cadquery_plane_x(normal: np.ndarray) -> np.ndarray:
     Ports OpenCascade's gp_Ax2(P, V) auto-selection: choose an auxiliary
     direction D from the smallest-magnitude component of N, then derive
     plane X as N x (D x N).
+
+    Args:
+        normal: Normalized projection normal.
+
+    Returns:
+        Normalized in-plane X axis.
     """
+
     a, b, c = float(normal[0]), float(normal[1]), float(normal[2])
     a_abs, b_abs, c_abs = abs(a), abs(b), abs(c)
     if b_abs <= a_abs and b_abs <= c_abs:

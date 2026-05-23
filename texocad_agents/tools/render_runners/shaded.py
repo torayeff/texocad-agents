@@ -1,3 +1,5 @@
+"""Render STEP files as simple shaded PNG images with visible edges."""
+
 import json
 import math
 import os
@@ -44,29 +46,59 @@ CONFIG_FILE = "render_config.json"
 
 @dataclass(frozen=True)
 class Triangle:
+    """Renderable mesh triangle.
+
+    Attributes:
+        points: Three 3D points as a `(3, 3)` NumPy array.
+        color: RGB color values in the 0.0 to 1.0 range.
+    """
+
     points: np.ndarray
     color: np.ndarray
 
 
 @dataclass(frozen=True)
 class EdgeSegment:
+    """Renderable mesh edge segment.
+
+    Attributes:
+        points: Two 3D points as a `(2, 3)` NumPy array.
+    """
+
     points: np.ndarray
 
 
 @dataclass(frozen=True)
 class RenderGeometry:
+    """Triangulated scene geometry used by the shaded renderer.
+
+    Attributes:
+        triangles: Face triangles to shade and depth-test.
+        edges: Boundary edges to overlay when visible.
+    """
+
     triangles: list[Triangle]
     edges: list[EdgeSegment]
 
 
 @dataclass(frozen=True)
 class Camera:
+    """Perspective camera fitted to render geometry.
+
+    Attributes:
+        position: Camera position in world coordinates.
+        target: Point the camera looks at.
+        up: Preferred world-space up vector.
+    """
+
     position: np.ndarray
     target: np.ndarray
     up: np.ndarray
 
 
 def main() -> None:
+    """Run the shaded render script from sandbox configuration."""
+
     out_dir = Path(os.environ["TEXOCAD_OUTPUT_DIR"])
     out_dir.mkdir(parents=True, exist_ok=True)
     config = json.loads(Path(CONFIG_FILE).read_text())
@@ -96,6 +128,18 @@ def main() -> None:
 
 
 def normalize(vector: np.ndarray) -> np.ndarray:
+    """Return a unit vector.
+
+    Args:
+        vector: Vector to normalize.
+
+    Returns:
+        Normalized vector with length 1.
+
+    Raises:
+        ValueError: If `vector` is effectively zero-length.
+    """
+
     length = np.linalg.norm(vector)
     if length <= EPS:
         raise ValueError("Cannot normalize a zero-length vector.")
@@ -103,7 +147,18 @@ def normalize(vector: np.ndarray) -> np.ndarray:
 
 
 def solid_color(solid: object, color_tool: object, shape_tool: object) -> np.ndarray:
-    """Look up the XDE color for a solid, falling back to DEFAULT_COLOR."""
+    """Look up the XDE color for a solid.
+
+    Args:
+        solid: OpenCascade solid shape.
+        color_tool: XCAF color tool from the loaded STEP document.
+        shape_tool: XCAF shape tool from the loaded STEP document.
+
+    Returns:
+        RGB color array in the 0.0 to 1.0 range, or `DEFAULT_COLOR` when the
+        STEP document has no surface/general color for the solid.
+    """
+
     color = Quantity_Color()
     if color_tool.GetColor(solid, XCAFDoc_ColorSurf, color) or color_tool.GetColor(
         solid, XCAFDoc_ColorGen, color
@@ -124,6 +179,17 @@ def solid_color(solid: object, color_tool: object, shape_tool: object) -> np.nda
 
 
 def face_geometry(shape: object, color: np.ndarray) -> RenderGeometry:
+    """Extract triangulated faces and boundary edges from a shape.
+
+    Args:
+        shape: OpenCascade shape to traverse for faces.
+        color: RGB color assigned to all extracted triangles.
+
+    Returns:
+        Renderable geometry containing triangles and silhouette-like boundary
+        edges derived from face triangulation.
+    """
+
     triangles: list[Triangle] = []
     edges: list[EdgeSegment] = []
     explorer = TopExp_Explorer(shape, TopAbs_FACE)
@@ -171,6 +237,19 @@ def face_geometry(shape: object, color: np.ndarray) -> RenderGeometry:
 
 
 def load_step_geometry(step_file: Path) -> RenderGeometry:
+    """Load STEP geometry and convert it into renderable triangles and edges.
+
+    Args:
+        step_file: STEP file to load.
+
+    Returns:
+        Renderable geometry for all free root shapes in the STEP document.
+
+    Raises:
+        ValueError: If the STEP file cannot be read or contains no renderable
+            faces.
+    """
+
     app = XCAFApp_Application.GetApplication_s()
     doc = TDocStd_Document(TCollection_ExtendedString("MDTV-XCAF"))
     app.InitDocument(doc)
@@ -218,7 +297,16 @@ def _geometry_from_root(
     Falls back from SOLID → SHELL → FACE so multi-root assemblies, shell-only
     STEPs, and face-only STEPs all render. SOLID gets the XDE color lookup;
     SHELL/FACE roots use DEFAULT_COLOR.
+
+    Args:
+        root_shape: Root OpenCascade shape from the STEP document.
+        color_tool: XCAF color tool from the loaded STEP document.
+        shape_tool: XCAF shape tool from the loaded STEP document.
+
+    Returns:
+        Tuple of triangle and edge lists.
     """
+
     triangles: list[Triangle] = []
     edges: list[EdgeSegment] = []
 
@@ -250,6 +338,17 @@ def _geometry_from_root(
 def preset_camera(
     view: str, triangles: list[Triangle], size: tuple[int, int]
 ) -> Camera:
+    """Fit a camera for a named shaded render direction.
+
+    Args:
+        view: Preset view name.
+        triangles: Triangles used to fit the camera bounds.
+        size: Output image size as `(width, height)`.
+
+    Returns:
+        Camera positioned to frame the geometry.
+    """
+
     direction = normalize(np.array(SHADED_DIRECTIONS[view], dtype=np.float64))
     up = np.array(VIEW_UPS[view], dtype=np.float64)
     return _fit_camera(direction=direction, up=up, triangles=triangles, size=size)
@@ -263,7 +362,20 @@ def custom_camera(
     triangles: list[Triangle],
     size: tuple[int, int],
 ) -> Camera:
-    """Use camera/target as a direction hint, then fit to projected bounds."""
+    """Fit a camera using caller-provided camera, target, and up hints.
+
+    Args:
+        raw_position: Requested camera position.
+        raw_target: Requested camera target.
+        raw_up: Requested up vector.
+        triangles: Triangles used to fit the camera bounds.
+        size: Output image size as `(width, height)`.
+
+    Returns:
+        Camera fitted to projected geometry bounds. A default direction or up
+        vector is used if the supplied vectors are degenerate.
+    """
+
     direction_vec = raw_position - raw_target
     if float(np.linalg.norm(direction_vec)) < EPS:
         direction_vec = np.array([1.0, -1.0, 0.8], dtype=np.float64)
@@ -285,6 +397,18 @@ def _fit_camera(
     triangles: list[Triangle],
     size: tuple[int, int],
 ) -> Camera:
+    """Fit a perspective camera to projected triangle bounds.
+
+    Args:
+        direction: Normalized camera direction from target toward position.
+        up: Preferred normalized up vector.
+        triangles: Triangles used to compute scene bounds.
+        size: Output image size as `(width, height)`.
+
+    Returns:
+        Camera positioned so all triangle points fit inside the padded frame.
+    """
+
     width, height = size
     points = np.vstack([triangle.points for triangle in triangles])
     center = (points.min(axis=0) + points.max(axis=0)) * 0.5
@@ -321,6 +445,18 @@ def _fit_camera(
 
 
 def camera_basis(camera: Camera) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Compute normalized right, up, and forward basis vectors.
+
+    Args:
+        camera: Camera to derive basis vectors from.
+
+    Returns:
+        Tuple of `(right, up, forward)` unit vectors.
+
+    Raises:
+        ValueError: If the camera direction and up vector are parallel.
+    """
+
     forward = normalize(camera.target - camera.position)
     view_up = normalize(camera.up)
     right = np.cross(forward, view_up)
@@ -337,6 +473,18 @@ def camera_basis(camera: Camera) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
 def project_points(
     points: np.ndarray, camera: Camera, size: tuple[int, int]
 ) -> tuple[np.ndarray, np.ndarray]:
+    """Project 3D points into screen space.
+
+    Args:
+        points: 3D points as an `(n, 3)` array.
+        camera: Camera used for projection.
+        size: Output image size as `(width, height)`.
+
+    Returns:
+        Tuple of `(screen_points, depths)`, where screen points are `(x, y)`
+        pixels and depths are positive camera-space distances.
+    """
+
     width, height = size
     right, up, forward = camera_basis(camera)
     relative = points - camera.position
@@ -351,6 +499,17 @@ def project_points(
 
 
 def shade_color(color: np.ndarray, points: np.ndarray, camera: Camera) -> np.ndarray:
+    """Apply simple directional lighting to a triangle color.
+
+    Args:
+        color: Base RGB color in the 0.0 to 1.0 range.
+        points: Triangle points as a `(3, 3)` array.
+        camera: Camera used to orient face normals toward the viewer.
+
+    Returns:
+        Shaded RGB color in the 0.0 to 1.0 range.
+    """
+
     normal = np.cross(points[1] - points[0], points[2] - points[0])
     if np.linalg.norm(normal) <= EPS:
         return color
@@ -374,6 +533,16 @@ def rasterize_triangle(
     depth: np.ndarray,
     color: np.ndarray,
 ) -> None:
+    """Depth-test and fill one projected triangle.
+
+    Args:
+        color_buffer: RGB image buffer mutated in place.
+        depth_buffer: Per-pixel depth buffer mutated in place.
+        screen: Projected triangle screen coordinates.
+        depth: Triangle vertex depths.
+        color: Triangle RGB color in the 0.0 to 1.0 range.
+    """
+
     height, width, _ = color_buffer.shape
     if np.any(depth <= EPS):
         return
@@ -420,6 +589,15 @@ def blend_visible_edges(
     projected_edges: list[tuple[np.ndarray, np.ndarray]],
     alpha: float = 0.28,
 ) -> None:
+    """Overlay mesh edges that remain visible after depth sampling.
+
+    Args:
+        image: RGBA image mutated in place.
+        depth_buffer: Per-pixel triangle depth buffer.
+        projected_edges: Projected edge screen coordinates and depths.
+        alpha: Edge overlay opacity from 0.0 to 1.0.
+    """
+
     overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
     width, height = image.size
@@ -461,6 +639,16 @@ def render_png(
     size: tuple[int, int],
     draw_edges: bool,
 ) -> None:
+    """Rasterize shaded geometry to a PNG file.
+
+    Args:
+        geometry: Renderable triangles and edges.
+        camera: Camera used for projection.
+        output_file: Destination PNG file path.
+        size: Output image size as `(width, height)`.
+        draw_edges: Whether to overlay visible boundary edges.
+    """
+
     width, height = size
     color_buffer = np.empty((height, width, 3), dtype=np.uint8)
     color_buffer[:, :] = BACKGROUND_COLOR
@@ -483,6 +671,18 @@ def render_png(
 
 
 def vector_from_sequence(value: Sequence[float] | np.ndarray) -> np.ndarray:
+    """Convert a three-coordinate sequence into a NumPy vector.
+
+    Args:
+        value: Sequence or array containing exactly three numeric coordinates.
+
+    Returns:
+        NumPy vector with dtype `float64`.
+
+    Raises:
+        ValueError: If `value` does not contain exactly three coordinates.
+    """
+
     vector = np.array(value, dtype=np.float64)
     if vector.shape != (3,):
         raise ValueError("Camera vectors must contain exactly three coordinates.")

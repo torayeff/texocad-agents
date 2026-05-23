@@ -1,3 +1,5 @@
+"""Run generated Python CAD code inside ephemeral Daytona sandboxes."""
+
 import logging
 import posixpath
 import time
@@ -20,6 +22,21 @@ MAX_PROCESS_OUTPUT_CHARS = 20_000
 
 @dataclass(frozen=True)
 class SandboxConfig:
+    """Configuration for sandbox snapshot creation and execution.
+
+    Attributes:
+        snapshot_name: Daytona snapshot name used as the Python runtime base.
+        python_version: Python version for snapshot creation.
+        pip_packages: Python packages installed in the snapshot.
+        apt_packages: System packages installed in the snapshot.
+        cpu: CPU allocation for snapshot and sandbox resources.
+        memory: Memory allocation for snapshot and sandbox resources.
+        create_timeout: Timeout in seconds for snapshot and sandbox creation.
+        exec_timeout: Timeout in seconds for sandbox process execution.
+        snapshot_poll_interval: Seconds between snapshot activation polls.
+        network_block_all: Whether to block outbound network access.
+    """
+
     snapshot_name: str = "texocad-cadquery-v1"
     python_version: str = "3.12"
     pip_packages: tuple[str, ...] = (
@@ -39,6 +56,14 @@ class SandboxConfig:
 
 @dataclass(frozen=True)
 class SandboxRunResult:
+    """Result from a sandboxed Python execution.
+
+    Attributes:
+        exit_code: Exit code from the main script or post-run command.
+        output: Combined process output, truncated when needed.
+        files: Local paths downloaded from the sandbox output directory.
+    """
+
     exit_code: int
     output: str
     files: tuple[Path, ...] = ()
@@ -46,6 +71,15 @@ class SandboxRunResult:
 
 @dataclass(frozen=True)
 class SandboxCommand:
+    """Secondary command to run after the main sandbox script succeeds.
+
+    Attributes:
+        filename: Script filename to upload before executing `command`.
+        contents: File contents for `filename`.
+        command: Shell command executed in the sandbox working directory.
+        support_files: Optional extra files uploaded alongside `filename`.
+    """
+
     filename: str
     contents: bytes
     command: str
@@ -53,6 +87,21 @@ class SandboxCommand:
 
 
 def ensure_snapshot(daytona: Daytona, config: SandboxConfig) -> None:
+    """Ensure the configured Daytona snapshot exists and is active.
+
+    Creates the snapshot with the configured Debian image, apt packages, Python
+    packages, and resources when it does not already exist.
+
+    Args:
+        daytona: Daytona client used to inspect or create snapshots.
+        config: Sandbox runtime configuration.
+
+    Raises:
+        RuntimeError: If the snapshot enters an unusable state or activation
+            does not finish before the configured timeout.
+        Exception: Propagates unexpected Daytona client failures.
+    """
+
     try:
         snapshot = daytona.snapshot.get(config.snapshot_name)
     except Exception as exc:
@@ -94,6 +143,25 @@ def run_python(
     support_files: dict[str, bytes] | None = None,
     post_run: SandboxCommand | None = None,
 ) -> SandboxRunResult:
+    """Run Python code in an ephemeral sandbox and download produced outputs.
+
+    The main script and optional support files are uploaded into a temporary
+    working directory. Files written to `TEXOCAD_OUTPUT_DIR` are downloaded into
+    `out_dir` after successful execution. When `post_run` is provided, it runs
+    after the main script and may add more output files.
+
+    Args:
+        code: Python source for the main script.
+        out_dir: Local directory that receives downloaded output files.
+        config: Optional sandbox configuration. Defaults to `SandboxConfig()`.
+        support_files: Additional files uploaded next to the main script.
+        post_run: Optional command and support files run after the main script.
+
+    Returns:
+        Sandbox execution result with exit code, process output, and downloaded
+        file paths. Non-zero exits return without downloading outputs.
+    """
+
     config = config or SandboxConfig()
     daytona = Daytona()
     ensure_snapshot(daytona, config)
@@ -162,6 +230,19 @@ def _exec(
     env: dict[str, str],
     config: SandboxConfig,
 ) -> tuple[int, str]:
+    """Execute a shell command inside the sandbox.
+
+    Args:
+        sandbox: Daytona sandbox object.
+        command: Shell command to execute.
+        work_dir: Remote working directory.
+        env: Environment variables for the process.
+        config: Sandbox runtime configuration.
+
+    Returns:
+        Tuple of `(exit_code, truncated_output)`.
+    """
+
     response = sandbox.process.exec(
         command,
         cwd=work_dir,
@@ -174,6 +255,17 @@ def _exec(
 def _download_outputs(
     sandbox: object, remote_output_dir: str, out_dir: Path
 ) -> tuple[Path, ...]:
+    """Download sandbox output files into a local directory.
+
+    Args:
+        sandbox: Daytona sandbox object.
+        remote_output_dir: Remote output directory path.
+        out_dir: Local destination directory.
+
+    Returns:
+        Local paths for downloaded files, sorted by remote filename.
+    """
+
     remote_output_files = sorted(
         posixpath.join(remote_output_dir, item.name)
         for item in sandbox.fs.list_files(remote_output_dir)
@@ -193,6 +285,14 @@ def _upload_files(
     work_dir: str,
     files: dict[str, bytes] | None,
 ) -> None:
+    """Upload support files into a sandbox working directory.
+
+    Args:
+        sandbox: Daytona sandbox object.
+        work_dir: Remote working directory.
+        files: Mapping of filenames to file contents.
+    """
+
     for filename, contents in sorted((files or {}).items()):
         sandbox.fs.upload_file(
             contents,
@@ -201,6 +301,15 @@ def _upload_files(
 
 
 def _snapshot_state(snapshot: object) -> str:
+    """Normalize a Daytona snapshot state value.
+
+    Args:
+        snapshot: Daytona snapshot object.
+
+    Returns:
+        Lowercase snapshot state string.
+    """
+
     raw_state = getattr(snapshot, "state", "")
     state_value = getattr(raw_state, "value", raw_state)
     return str(state_value).strip().lower().split(".")[-1].replace("_", " ")
@@ -211,6 +320,18 @@ def _wait_for_active_snapshot(
     snapshot: object,
     config: SandboxConfig,
 ) -> None:
+    """Poll until a snapshot becomes active.
+
+    Args:
+        daytona: Daytona client used to refresh snapshot state.
+        snapshot: Initial Daytona snapshot object.
+        config: Sandbox runtime configuration.
+
+    Raises:
+        RuntimeError: If the snapshot enters an unusable state or activation
+            times out.
+    """
+
     deadline = (
         None if config.create_timeout == 0 else time.monotonic() + config.create_timeout
     )
@@ -234,6 +355,15 @@ def _wait_for_active_snapshot(
 
 
 def _truncate(text: str) -> str:
+    """Limit process output to the configured maximum length.
+
+    Args:
+        text: Process output text.
+
+    Returns:
+        Original or truncated output text.
+    """
+
     if len(text) <= MAX_PROCESS_OUTPUT_CHARS:
         return text
     return text[:MAX_PROCESS_OUTPUT_CHARS] + "\n...[sandbox output truncated]..."

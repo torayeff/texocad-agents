@@ -1,3 +1,5 @@
+"""Define the factory for constructing the TexoCAD CAD agent."""
+
 from deepagents import create_deep_agent
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph.state import CompiledStateGraph
@@ -11,6 +13,17 @@ from texocad_agents.tools.replace_file import replace_file
 
 
 async def create_cad_agent(config: RunnableConfig) -> CompiledStateGraph:
+    """Create a configured CAD deep agent.
+
+    Args:
+        config: LangGraph runnable configuration. `metadata.model` may select a
+            model key from the TexoCAD model registry.
+
+    Returns:
+        Compiled deep agent graph with attachment reading, file replacement,
+        CAD creation, and render-view tools.
+    """
+
     model = create_model(config.get("metadata", {}).get("model"))
 
     return create_deep_agent(

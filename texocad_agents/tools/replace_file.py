@@ -1,3 +1,5 @@
+"""Replace files in the agent filesystem through LangGraph state updates."""
+
 from deepagents.backends.utils import create_file_data
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import tool

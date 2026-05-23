@@ -1,3 +1,5 @@
+"""Render additional stored views for existing CAD revisions."""
+
 import json
 import tempfile
 from pathlib import Path
@@ -38,6 +40,7 @@ def render_view(
 
     Args:
         revision_number: Stored design revision number to render.
+        runtime: LangGraph tool runtime for the current tool call.
         view: Camera view to render. Use one of "iso", "top", "bottom", "front",
             "back", "left", or "right".
         style: Render style. Use "both" (default) to produce ortho and shaded
@@ -139,6 +142,19 @@ def render_view(
 
 
 def _step_export(revision: dict) -> StoredBlob:
+    """Extract the single STEP export recorded on a revision.
+
+    Args:
+        revision: Stored design revision entity.
+
+    Returns:
+        Stored blob metadata for the STEP export.
+
+    Raises:
+        ValueError: If export metadata is invalid or does not contain exactly
+            one STEP file.
+    """
+
     try:
         exports = json.loads(revision.get("exports_json") or "[]")
     except json.JSONDecodeError:
@@ -165,6 +181,18 @@ def _step_export(revision: dict) -> StoredBlob:
 
 
 def _vector(vector: list[float] | None) -> tuple[float, float, float] | None:
+    """Normalize an optional three-number vector to floats.
+
+    Args:
+        vector: Optional list or tuple containing three numeric values.
+
+    Returns:
+        Three-float tuple, or None when no vector is provided.
+
+    Raises:
+        ValueError: If `vector` is not a three-item sequence.
+    """
+
     if vector is None:
         return None
     if not isinstance(vector, (list, tuple)) or len(vector) != 3:
@@ -173,6 +201,18 @@ def _vector(vector: list[float] | None) -> tuple[float, float, float] | None:
 
 
 def _resolve_style(style: str) -> str:
+    """Validate and normalize a render style name.
+
+    Args:
+        style: Requested render style.
+
+    Returns:
+        Lowercase render style.
+
+    Raises:
+        ValueError: If `style` is not supported.
+    """
+
     value = style.lower()
     if value not in RENDER_STYLES:
         raise ValueError(

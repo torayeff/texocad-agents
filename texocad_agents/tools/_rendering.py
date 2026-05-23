@@ -1,3 +1,5 @@
+"""Shared render helpers for CAD revision previews."""
+
 import base64
 import json
 from pathlib import Path
@@ -32,6 +34,29 @@ def save_render(
     thread_id: str,
     run_id: str | None,
 ) -> dict:
+    """Upload a render image and persist preview metadata.
+
+    Args:
+        design_previews_table: Azure Table client for preview rows.
+        storage_container: Azure Blob container client.
+        owner_id: Authenticated owner identity.
+        design_id: Stable design identifier.
+        revision_number: Revision number the render belongs to.
+        image_path: Local PNG path produced by a render runner.
+        view: Stored preview view name.
+        source_export_checksum: Checksum of the STEP export rendered.
+        camera: Optional custom camera vector.
+        up: Optional custom up vector.
+        thread_id: LangGraph thread that created the preview.
+        run_id: Optional LangGraph run that created the preview.
+
+    Returns:
+        Dictionary containing stored render blobs and base64 PNG image data.
+
+    Raises:
+        ValueError: If `image_path` is None.
+    """
+
     if image_path is None:
         raise ValueError(f"render PNG for view {view!r} was not produced")
 
@@ -74,6 +99,24 @@ def render_step(
     camera: tuple[float, float, float] | None = None,
     up: tuple[float, float, float] | None = None,
 ) -> Path:
+    """Render STEP bytes through a sandboxed render runner.
+
+    Args:
+        step_bytes: STEP file contents to render.
+        step_filename: Filename to use inside the sandbox.
+        out_dir: Local directory for downloaded render output.
+        view: Named view for preset renders.
+        style: Render runner style, such as `ortho` or `shaded`.
+        camera: Optional custom camera position vector.
+        up: Optional custom up vector.
+
+    Returns:
+        Local path to the single rendered PNG.
+
+    Raises:
+        ValueError: If rendering fails or does not produce exactly one PNG.
+    """
+
     result = run_python(
         _runner_source(style),
         out_dir,
@@ -102,6 +145,15 @@ def render_step(
 
 
 def build_render_command(view: str = "iso") -> SandboxCommand:
+    """Build the sandbox post-run command for default render styles.
+
+    Args:
+        view: Named view used by default render runners.
+
+    Returns:
+        Sandbox command that runs bundled render scripts after CAD export.
+    """
+
     runner_lines = "".join(
         f'echo "=== {style}.py ==="\n'
         f"python {style}.py 2>&1\n"
@@ -138,6 +190,18 @@ def render_config(
     camera: tuple[float, float, float] | None,
     up: tuple[float, float, float] | None,
 ) -> bytes:
+    """Serialize render runner configuration to JSON bytes.
+
+    Args:
+        step_filename: STEP filename for the runner, or empty to auto-detect.
+        view: Named view for preset renders.
+        camera: Optional custom camera position vector.
+        up: Optional custom up vector.
+
+    Returns:
+        UTF-8 encoded JSON configuration bytes.
+    """
+
     return json.dumps({
         "step_filename": step_filename,
         "view": view,
@@ -147,4 +211,13 @@ def render_config(
 
 
 def _runner_source(name: str) -> str:
+    """Read a bundled render runner source file.
+
+    Args:
+        name: Render runner stem, without the `.py` suffix.
+
+    Returns:
+        Render runner Python source text.
+    """
+
     return (RENDER_RUNNERS_DIR / f"{name}.py").read_text()

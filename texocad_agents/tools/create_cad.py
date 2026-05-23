@@ -1,3 +1,5 @@
+"""Build CAD source files, persist revisions, and attach model artifacts."""
+
 import tempfile
 from pathlib import Path
 
@@ -37,6 +39,8 @@ DEFAULT_RENDER_OUTPUTS: dict[str, tuple[str, str]] = {
 
 
 class _SandboxOutputError(Exception):
+    """Raised when sandbox outputs do not satisfy CAD artifact constraints."""
+
     pass
 
 
@@ -55,6 +59,7 @@ def create_cad(
 
     Args:
         file_path: Path to the CAD Python file in the agent filesystem.
+        runtime: LangGraph tool runtime for the current tool call.
     """
 
     code = read_runtime_file(file_path, runtime)
@@ -144,6 +149,19 @@ def create_cad(
 
 
 def _validated_step_file(files: tuple[Path, ...]) -> Path:
+    """Validate sandbox outputs and return the single STEP file.
+
+    Args:
+        files: Paths downloaded from the sandbox output directory.
+
+    Returns:
+        The single STEP output file.
+
+    Raises:
+        _SandboxOutputError: If outputs include unsupported files, lack exactly
+            one STEP file, or exceed the model size limit.
+    """
+
     unsupported = [
         file_path.name
         for file_path in files
@@ -184,6 +202,21 @@ def _save_renders(
     sandbox_output: str,
     export_checksum: str,
 ) -> tuple[dict[str, dict], list[str]]:
+    """Persist default render PNGs produced by sandbox post-processing.
+
+    Args:
+        tables: Design table clients.
+        storage_container: Azure Blob container client.
+        ctx: Authenticated tool context.
+        revision_number: Revision number the renders belong to.
+        files: Sandbox output files.
+        sandbox_output: Combined sandbox process output for diagnostics.
+        export_checksum: Checksum of the STEP export used for renders.
+
+    Returns:
+        Tuple of `(renders, errors)`, where renders are keyed by view name.
+    """
+
     png_files = [file_path for file_path in files if file_path.suffix.lower() == ".png"]
     renders: dict[str, dict] = {}
     errors: list[str] = []
@@ -227,6 +260,15 @@ def _save_renders(
 
 
 def _render_log_suffix(output: str) -> str:
+    """Format sandbox output for render error messages.
+
+    Args:
+        output: Combined sandbox process output.
+
+    Returns:
+        Empty string when no output exists, otherwise a formatted suffix.
+    """
+
     log = output.strip()
     if not log:
         return ""
@@ -241,6 +283,19 @@ def _upload_source(
     filename: str,
     code: str,
 ) -> StoredBlob:
+    """Upload CAD source code for a revision.
+
+    Args:
+        storage_container: Azure Blob container client.
+        ctx: Authenticated tool context.
+        revision_number: Revision number the source belongs to.
+        filename: Source filename.
+        code: Source code contents.
+
+    Returns:
+        Stored source blob metadata.
+    """
+
     blob_name = revision_blob_name(
         ctx.owner_id, ctx.design_id, revision_number, "source", filename
     )
@@ -259,6 +314,18 @@ def _upload_export(
     revision_number: int,
     model_path: Path,
 ) -> StoredBlob:
+    """Upload the STEP model export for a revision.
+
+    Args:
+        storage_container: Azure Blob container client.
+        ctx: Authenticated tool context.
+        revision_number: Revision number the export belongs to.
+        model_path: Local STEP file path.
+
+    Returns:
+        Stored export blob metadata.
+    """
+
     filename = f"{escape_key(model_path.stem)}{MODEL_EXTENSION}"
     blob_name = revision_blob_name(
         ctx.owner_id,
@@ -287,6 +354,21 @@ def _revision_message(
     renders: dict[str, dict],
     render_errors: list[str],
 ) -> Command:
+    """Build the tool response for a created CAD revision.
+
+    Args:
+        runtime: LangGraph tool runtime for the current tool call.
+        ctx: Authenticated tool context.
+        design_revision: Persisted design revision entity.
+        source_blob: Stored source blob metadata.
+        exports: Stored export blob metadata.
+        renders: Stored render payloads keyed by view name.
+        render_errors: Non-fatal render errors to include in the response.
+
+    Returns:
+        LangGraph command with a tool message and artifact metadata.
+    """
+
     render_error_text = (
         "\nrender_failed: " + "; ".join(render_errors) if render_errors else ""
     )
@@ -342,6 +424,18 @@ def _sandbox_failure_command(
     exit_code: int,
     output: str,
 ) -> Command:
+    """Build the tool response for a failed sandbox run.
+
+    Args:
+        runtime: LangGraph tool runtime for the current tool call.
+        design_id: Stable design identifier.
+        exit_code: Sandbox process exit code.
+        output: Sandbox process output.
+
+    Returns:
+        LangGraph command containing an error tool message.
+    """
+
     return error_message(
         runtime,
         "Sandbox execution failed.\n"

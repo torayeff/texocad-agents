@@ -1,3 +1,5 @@
+"""Generate or edit sketch images and persist them as design revisions."""
+
 import base64
 import io
 import os
@@ -23,8 +25,8 @@ from texocad_agents.tools._runtime import (
     authorize_blob_access,
     create_revision,
     error_message,
-    revision_artifact,
     get_tool_context,
+    revision_artifact,
 )
 
 SKETCH_CONTENT_TYPE = "image/png"
@@ -58,6 +60,7 @@ def create_sketch(
 
     Args:
         prompt: Detailed text description of the image to generate, or edit instructions when images are provided.
+        runtime: LangGraph tool runtime for the current tool call.
         quality: Image quality - "low", "medium", "high", or "auto".
         size: Image dimensions - "1024x1024", "1536x1024", "1024x1536", "2048x2048", or "auto".
         images: List of blob paths or URLs for input images. Can include user-uploaded attachments or previous revision exports. When provided, the model edits or uses them as reference.
@@ -135,6 +138,19 @@ def _store_sketch(
     image_bytes: bytes,
     image_base64: str,
 ) -> Command:
+    """Persist generated sketch artifacts and build the tool response.
+
+    Args:
+        runtime: LangGraph tool runtime for the current tool call.
+        ctx: Authenticated tool context.
+        prompt: Prompt text used to generate or edit the image.
+        image_bytes: PNG image bytes returned by the image model.
+        image_base64: Base64-encoded PNG image data for the response.
+
+    Returns:
+        LangGraph command with a tool message and sketch artifact metadata.
+    """
+
     tables, storage_container, design_revision, revision_number = create_revision(
         ctx, title=ctx.metadata.get("title") or "Sketch"
     )
@@ -228,6 +244,18 @@ def _validate_args(
     images: list[str] | None,
     mask: str | None,
 ) -> str | None:
+    """Validate image generation options.
+
+    Args:
+        quality: Requested image quality.
+        size: Requested image size.
+        images: Optional input image blob paths.
+        mask: Optional mask image blob path.
+
+    Returns:
+        Error message when validation fails, otherwise None.
+    """
+
     if quality not in ALLOWED_QUALITIES:
         return (
             f"Invalid quality {quality!r}. "
@@ -251,6 +279,18 @@ def _fetch_input_buffers(
     images: list[str] | None,
     mask: str | None,
 ) -> tuple[list[io.BytesIO], io.BytesIO | None, str | None]:
+    """Download and validate input image and mask buffers.
+
+    Args:
+        storage_container: Azure Blob container client.
+        ctx: Authenticated tool context.
+        images: Optional input image blob paths.
+        mask: Optional mask image blob path.
+
+    Returns:
+        Tuple of `(image_buffers, mask_buffer, error)`.
+    """
+
     image_buffers: list[io.BytesIO] = []
     for image_path in images or []:
         buffer, error = _download_validated_image(storage_container, image_path, ctx)
@@ -272,6 +312,17 @@ def _download_validated_image(
     image_path: str,
     ctx: ToolContext,
 ) -> tuple[io.BytesIO | None, str | None]:
+    """Download a user-scoped image and verify it can be opened.
+
+    Args:
+        storage_container: Azure Blob container client.
+        image_path: Blob path or URL to authorize and download.
+        ctx: Authenticated tool context.
+
+    Returns:
+        Tuple of `(image_buffer, error)`.
+    """
+
     blob_name = authorize_blob_access(image_path, ctx)
     if blob_name is None:
         return (
@@ -296,6 +347,15 @@ def _download_validated_image(
 
 
 def _validate_image_bytes(image_bytes: bytes) -> str | None:
+    """Verify image bytes with Pillow.
+
+    Args:
+        image_bytes: Raw image bytes.
+
+    Returns:
+        Error text when validation fails, otherwise None.
+    """
+
     try:
         Image.open(io.BytesIO(image_bytes)).verify()
     except (UnidentifiedImageError, OSError, ValueError) as exc:

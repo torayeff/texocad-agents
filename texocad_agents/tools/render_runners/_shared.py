@@ -1,3 +1,5 @@
+"""Shared render runner constants and file resolution helpers."""
+
 from pathlib import Path
 
 EPS = 1e-5
@@ -34,6 +36,20 @@ VIEW_UPS: dict[str, tuple[float, float, float]] = {
 
 
 def find_step(out_dir: Path, step_filename: str) -> Path:
+    """Resolve the STEP file to render.
+
+    Args:
+        out_dir: Sandbox output directory.
+        step_filename: Explicit STEP filename from render config, or empty to
+            auto-detect one STEP file in `out_dir`.
+
+    Returns:
+        Path to the STEP file.
+
+    Raises:
+        ValueError: If auto-detection does not find exactly one STEP file.
+    """
+
     if step_filename:
         step_path = out_dir / step_filename
         if step_path.exists():
