@@ -1,7 +1,6 @@
 import base64
 import io
 import os
-from dataclasses import dataclass
 
 from langchain_core.messages import ToolMessage
 from langchain_core.messages.content import create_image_block, create_text_block
@@ -41,12 +40,6 @@ ALLOWED_SIZES = {
 MAX_INPUT_IMAGES = 4
 
 
-@dataclass(frozen=True)
-class _InputBuffers:
-    images: list[io.BytesIO]
-    mask: io.BytesIO | None
-
-
 @tool(parse_docstring=True)
 def create_sketch(
     prompt: str,
@@ -82,25 +75,25 @@ def create_sketch(
         )
 
     storage_container = get_storage_container()
-    buffers, fetch_error = _fetch_input_buffers(storage_container, ctx, images, mask)
+    image_buffers, mask_buffer, fetch_error = _fetch_input_buffers(
+        storage_container, ctx, images, mask
+    )
     if fetch_error:
         return error_message(runtime, fetch_error)
 
     openai_base_url = os.environ.get("OPENAI_API_BASE")
     client = OpenAI(base_url=openai_base_url) if openai_base_url else OpenAI()
     try:
-        if buffers.images:
+        if image_buffers:
             edit_kwargs: dict = {
                 "model": "gpt-image-2",
-                "image": buffers.images
-                if len(buffers.images) > 1
-                else buffers.images[0],
+                "image": image_buffers if len(image_buffers) > 1 else image_buffers[0],
                 "prompt": prompt,
                 "quality": quality,
                 "size": size,
             }
-            if buffers.mask:
-                edit_kwargs["mask"] = buffers.mask
+            if mask_buffer:
+                edit_kwargs["mask"] = mask_buffer
             result = client.images.edit(**edit_kwargs)
         else:
             result = client.images.generate(
@@ -117,10 +110,10 @@ def create_sketch(
         return error_message(runtime, "Image generation returned no image data.")
     image_bytes = base64.b64decode(image_base64)
 
-    try:
-        Image.open(io.BytesIO(image_bytes)).verify()
-    except (UnidentifiedImageError, OSError, ValueError) as exc:
-        return error_message(runtime, f"Generated image is not a valid PNG: {exc}")
+    if image_error := _validate_image_bytes(image_bytes):
+        return error_message(
+            runtime, f"Generated image is not a valid PNG: {image_error}"
+        )
 
     try:
         return _store_sketch(
@@ -257,24 +250,21 @@ def _fetch_input_buffers(
     ctx: ToolContext,
     images: list[str] | None,
     mask: str | None,
-) -> tuple[_InputBuffers, str | None]:
+) -> tuple[list[io.BytesIO], io.BytesIO | None, str | None]:
     image_buffers: list[io.BytesIO] = []
-    if images:
-        for image_path in images:
-            buffer, error = _download_validated_image(
-                storage_container, image_path, ctx
-            )
-            if buffer is None:
-                return _InputBuffers(images=[], mask=None), error
-            image_buffers.append(buffer)
+    for image_path in images or []:
+        buffer, error = _download_validated_image(storage_container, image_path, ctx)
+        if buffer is None:
+            return [], None, error
+        image_buffers.append(buffer)
 
     mask_buffer: io.BytesIO | None = None
     if mask:
         mask_buffer, error = _download_validated_image(storage_container, mask, ctx)
         if mask_buffer is None:
-            return _InputBuffers(images=[], mask=None), error
+            return [], None, error
 
-    return _InputBuffers(images=image_buffers, mask=mask_buffer), None
+    return image_buffers, mask_buffer, None
 
 
 def _download_validated_image(
@@ -296,9 +286,18 @@ def _download_validated_image(
     except Exception as exc:
         return None, f"Could not download image from {image_path!r}: {exc}"
 
+    if image_error := _validate_image_bytes(image_bytes):
+        return (
+            None,
+            f"Refused image {image_path!r}: not a readable image ({image_error}).",
+        )
+
+    return io.BytesIO(image_bytes), None
+
+
+def _validate_image_bytes(image_bytes: bytes) -> str | None:
     try:
         Image.open(io.BytesIO(image_bytes)).verify()
     except (UnidentifiedImageError, OSError, ValueError) as exc:
-        return None, f"Refused image {image_path!r}: not a readable image ({exc})."
-
-    return io.BytesIO(image_bytes), None
+        return str(exc)
+    return None

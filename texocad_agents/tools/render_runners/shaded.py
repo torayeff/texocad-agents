@@ -34,6 +34,11 @@ DEFAULT_SIZE = (SIZE, SIZE)
 DEFAULT_COLOR = np.array([0xCF, 0xD6, 0xDF], dtype=np.float32) / 255.0
 BACKGROUND_COLOR = np.array([255, 255, 255], dtype=np.uint8)
 EDGE_COLOR = np.array([0x10, 0x18, 0x20], dtype=np.float32)
+KEY_LIGHT = np.array([1.0, -1.0, 2.0], dtype=np.float64)
+KEY_LIGHT /= np.linalg.norm(KEY_LIGHT)
+FILL_LIGHT = np.array([-2.0, 1.0, 1.0], dtype=np.float64)
+FILL_LIGHT /= np.linalg.norm(FILL_LIGHT)
+TOP_LIGHT = np.array([0.0, 0.0, 1.0], dtype=np.float64)
 CONFIG_FILE = "render_config.json"
 
 
@@ -355,9 +360,9 @@ def shade_color(color: np.ndarray, points: np.ndarray, camera: Camera) -> np.nda
     if np.dot(normal, view_direction) < 0:
         normal = -normal
 
-    key = max(float(np.dot(normal, normalize(np.array([1.0, -1.0, 2.0])))), 0.0)
-    fill = max(float(np.dot(normal, normalize(np.array([-2.0, 1.0, 1.0])))), 0.0)
-    top = max(float(np.dot(normal, np.array([0.0, 0.0, 1.0]))), 0.0)
+    key = max(float(np.dot(normal, KEY_LIGHT)), 0.0)
+    fill = max(float(np.dot(normal, FILL_LIGHT)), 0.0)
+    top = max(float(np.dot(normal, TOP_LIGHT)), 0.0)
     shade = min(1.35, 0.55 + key * 0.45 + fill * 0.22 + top * 0.12)
     return np.clip(color * shade, 0.0, 1.0)
 

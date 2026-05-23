@@ -113,6 +113,7 @@ def run_python(
 
         work_dir = f"/tmp/texocad-{uuid4().hex}"
         remote_output_dir = posixpath.join(work_dir, "outputs")
+        env = {"TEXOCAD_OUTPUT_DIR": remote_output_dir}
         sandbox.fs.create_folder(work_dir, "755")
         sandbox.fs.create_folder(remote_output_dir, "755")
         sandbox.fs.upload_file(
@@ -120,18 +121,9 @@ def run_python(
         )
         _upload_files(sandbox, work_dir, support_files)
 
-        response = sandbox.process.exec(
-            "python main.py 2>&1",
-            cwd=work_dir,
-            env={"TEXOCAD_OUTPUT_DIR": remote_output_dir},
-            timeout=config.exec_timeout,
-        )
-        output = _truncate(response.result or "")
-        if response.exit_code != 0:
-            return SandboxRunResult(
-                exit_code=response.exit_code,
-                output=output,
-            )
+        exit_code, output = _exec(sandbox, "python main.py 2>&1", work_dir, env, config)
+        if exit_code != 0:
+            return SandboxRunResult(exit_code=exit_code, output=output)
 
         if post_run is not None:
             _upload_files(sandbox, work_dir, post_run.support_files)
@@ -139,37 +131,17 @@ def run_python(
                 post_run.contents,
                 posixpath.join(work_dir, posixpath.basename(post_run.filename)),
             )
-            response = sandbox.process.exec(
-                post_run.command,
-                cwd=work_dir,
-                env={"TEXOCAD_OUTPUT_DIR": remote_output_dir},
-                timeout=config.exec_timeout,
+            exit_code, post_output = _exec(
+                sandbox, post_run.command, work_dir, env, config
             )
-            output = _truncate(f"{output}\n{response.result or ''}")
-            if response.exit_code != 0:
-                return SandboxRunResult(
-                    exit_code=response.exit_code,
-                    output=output,
-                )
-
-        remote_output_files = sorted(
-            posixpath.join(remote_output_dir, item.name)
-            for item in sandbox.fs.list_files(remote_output_dir)
-            if not item.is_dir
-        )
-
-        out_dir.mkdir(parents=True, exist_ok=True)
-        files: list[Path] = []
-        for remote_path in remote_output_files:
-            output_bytes = sandbox.fs.download_file(remote_path)
-            file_path = out_dir / posixpath.basename(remote_path)
-            file_path.write_bytes(output_bytes)
-            files.append(file_path)
+            output = _truncate(f"{output}\n{post_output}")
+            if exit_code != 0:
+                return SandboxRunResult(exit_code=exit_code, output=output)
 
         return SandboxRunResult(
             exit_code=0,
             output=output,
-            files=tuple(files),
+            files=_download_outputs(sandbox, remote_output_dir, out_dir),
         )
     finally:
         if sandbox is not None:
@@ -181,6 +153,39 @@ def run_python(
                     getattr(sandbox, "id", None),
                     exc,
                 )
+
+
+def _exec(
+    sandbox: object,
+    command: str,
+    work_dir: str,
+    env: dict[str, str],
+    config: SandboxConfig,
+) -> tuple[int, str]:
+    response = sandbox.process.exec(
+        command,
+        cwd=work_dir,
+        env=env,
+        timeout=config.exec_timeout,
+    )
+    return response.exit_code, _truncate(response.result or "")
+
+
+def _download_outputs(
+    sandbox: object, remote_output_dir: str, out_dir: Path
+) -> tuple[Path, ...]:
+    remote_output_files = sorted(
+        posixpath.join(remote_output_dir, item.name)
+        for item in sandbox.fs.list_files(remote_output_dir)
+        if not item.is_dir
+    )
+    out_dir.mkdir(parents=True, exist_ok=True)
+    files: list[Path] = []
+    for remote_path in remote_output_files:
+        file_path = out_dir / posixpath.basename(remote_path)
+        file_path.write_bytes(sandbox.fs.download_file(remote_path))
+        files.append(file_path)
+    return tuple(files)
 
 
 def _upload_files(

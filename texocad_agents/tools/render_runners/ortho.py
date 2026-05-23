@@ -15,6 +15,7 @@ PADDING = 32
 SVG_MARGIN = 16
 RENDER_OVERSAMPLE = 2
 CONFIG_FILE = "render_config.json"
+WHITE = (255, 255, 255)
 
 
 def main() -> None:
@@ -84,7 +85,7 @@ def svg_to_png(svg_path: Path, png_path: Path, rotation_deg: float) -> None:
             raw = raw.rotate(
                 rotation_deg,
                 resample=Image.BICUBIC,
-                fillcolor=(255, 255, 255),
+                fillcolor=WHITE,
                 expand=True,
             )
         trim_and_center(raw, SIZE, PADDING).save(png_path, format="PNG")
@@ -93,23 +94,19 @@ def svg_to_png(svg_path: Path, png_path: Path, rotation_deg: float) -> None:
 
 
 def trim_and_center(image: Image.Image, size: int, padding: int) -> Image.Image:
-    white = Image.new(image.mode, image.size, (255, 255, 255))
+    white = Image.new(image.mode, image.size, WHITE)
     bbox = ImageChops.difference(image, white).getbbox()
     if bbox is None:
-        return Image.new("RGB", (size, size), (255, 255, 255))
+        return Image.new("RGB", (size, size), WHITE)
 
     content = image.crop(bbox)
     target = max(size - 2 * padding, 1)
-    aspect = content.width / max(content.height, 1)
-    if aspect >= 1.0:
-        new_width = target
-        new_height = max(int(round(target / aspect)), 1)
-    else:
-        new_height = target
-        new_width = max(int(round(target * aspect)), 1)
+    scale = target / max(content.width, content.height, 1)
+    new_width = max(int(round(content.width * scale)), 1)
+    new_height = max(int(round(content.height * scale)), 1)
     resized = content.resize((new_width, new_height), Image.LANCZOS)
 
-    canvas = Image.new("RGB", (size, size), (255, 255, 255))
+    canvas = Image.new("RGB", (size, size), WHITE)
     canvas.paste(resized, ((size - new_width) // 2, (size - new_height) // 2))
     return canvas
 

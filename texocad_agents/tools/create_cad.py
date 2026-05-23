@@ -35,9 +35,9 @@ from texocad_agents.tools.render_view import (
 MODEL_EXTENSION = ".step"
 SOURCE_CONTENT_TYPE = "text/x-python; charset=utf-8"
 ALLOWED_OUTPUT_SUFFIXES = {".step", ".png", ".status"}
-RENDER_RUNNER_BY_VIEW: dict[str, tuple[str, str]] = {
-    "iso_ortho": (ORTHO_STATUS_FILENAME, "ortho.py"),
-    "iso_shaded": (SHADED_STATUS_FILENAME, "shaded.py"),
+RENDER_RUNNER_BY_VIEW: dict[str, tuple[str, str, str]] = {
+    "iso_ortho": (ORTHO_STATUS_FILENAME, "ortho.py", "_iso_ortho.png"),
+    "iso_shaded": (SHADED_STATUS_FILENAME, "shaded.py", "_iso_shaded.png"),
 }
 
 
@@ -158,13 +158,13 @@ def _validated_step_files(files: tuple[Path, ...]) -> tuple[Path, ...]:
             f"Sandbox must produce exactly 1 .step file; found {len(step_files)}."
         )
 
-    for step_file in step_files:
-        size = step_file.stat().st_size
-        if size > MAX_MODEL_BYTES:
-            raise _SandboxOutputError(
-                f"Sandbox produced oversized model file {step_file.name!r}: "
-                f"{size} bytes; limit is {MAX_MODEL_BYTES} bytes."
-            )
+    step_file = step_files[0]
+    size = step_file.stat().st_size
+    if size > MAX_MODEL_BYTES:
+        raise _SandboxOutputError(
+            f"Sandbox produced oversized model file {step_file.name!r}: "
+            f"{size} bytes; limit is {MAX_MODEL_BYTES} bytes."
+        )
 
     return step_files
 
@@ -178,13 +178,12 @@ def _save_renders(
     files: tuple[Path, ...],
     export_checksum: str,
 ) -> tuple[dict[str, dict], list[str]]:
-    runner_status, render_files = _parse_render_output(files)
+    render_outputs = _parse_render_output(files)
     renders: dict[str, dict] = {}
     errors: list[str] = []
 
-    for view, image_path in render_files.items():
+    for view, (status, image_path) in render_outputs.items():
         runner_name = RENDER_RUNNER_BY_VIEW[view][1]
-        status = runner_status.get(view)
         if image_path is None:
             if status is None:
                 errors.append(
@@ -220,31 +219,24 @@ def _save_renders(
 
 def _parse_render_output(
     files: tuple[Path, ...],
-) -> tuple[dict[str, int | None], dict[str, Path | None]]:
+) -> dict[str, tuple[int | None, Path | None]]:
     by_name = {path.name: path for path in files}
     png_files = [f for f in files if f.suffix.lower() == ".png"]
+    outputs: dict[str, tuple[int | None, Path | None]] = {}
 
-    status: dict[str, int | None] = {}
-    for view, (status_filename, _) in RENDER_RUNNER_BY_VIEW.items():
+    for view, (status_filename, _, png_suffix) in RENDER_RUNNER_BY_VIEW.items():
         path = by_name.get(status_filename)
         if path is None:
-            status[view] = None
-            continue
-        try:
-            status[view] = int(path.read_text().strip())
-        except ValueError:
-            status[view] = None
+            status = None
+        else:
+            try:
+                status = int(path.read_text().strip())
+            except ValueError:
+                status = None
+        matches = [f for f in png_files if f.name.endswith(png_suffix)]
+        outputs[view] = (status, matches[0] if len(matches) == 1 else None)
 
-    def by_suffix(suffix: str) -> Path | None:
-        matches = [f for f in png_files if f.name.endswith(suffix)]
-        return matches[0] if len(matches) == 1 else None
-
-    render_files = {
-        "iso_ortho": by_suffix("_iso_ortho.png"),
-        "iso_shaded": by_suffix("_iso_shaded.png"),
-    }
-
-    return status, render_files
+    return outputs
 
 
 def _upload_source(
@@ -273,9 +265,7 @@ def _upload_export(
     revision_number: int,
     model_path: Path,
 ) -> StoredBlob:
-    suffix = model_path.suffix.lower()
-    extension = ".step" if suffix == ".stp" else suffix
-    filename = f"{escape_key(model_path.stem)}{extension}"
+    filename = f"{escape_key(model_path.stem)}{MODEL_EXTENSION}"
     blob_name = revision_blob_name(
         ctx.owner_id,
         ctx.design_id,

@@ -30,6 +30,10 @@ RENDER_CONFIG_FILE = "render_config.json"
 SHARED_RUNNER_MODULE = "_shared.py"
 ORTHO_STATUS_FILENAME = "_ortho.status"
 SHADED_STATUS_FILENAME = "_shaded.status"
+DEFAULT_RENDER_RUNNERS = (
+    ("ortho", ORTHO_STATUS_FILENAME),
+    ("shaded", SHADED_STATUS_FILENAME),
+)
 
 
 @tool(parse_docstring=True)
@@ -99,6 +103,16 @@ def render_view(
                     f"which exceeds the {MAX_MODEL_BYTES} byte render limit."
                 )
             step_bytes = blob_client.download_blob().readall()
+            save_render_kwargs = {
+                "owner_id": ctx.owner_id,
+                "design_id": ctx.design_id,
+                "revision_number": int(revision_number),
+                "source_export_checksum": export.checksum,
+                "camera": cam,
+                "up": up_vec,
+                "thread_id": ctx.thread_id,
+                "run_id": ctx.run_id,
+            }
 
             for style_name in styles:
                 base_view = "custom" if cam else view.lower()
@@ -117,16 +131,9 @@ def render_view(
                 render = save_render(
                     tables.design_previews,
                     container,
-                    owner_id=ctx.owner_id,
-                    design_id=ctx.design_id,
-                    revision_number=int(revision_number),
+                    **save_render_kwargs,
                     image_path=image_path,
                     view=view_name,
-                    source_export_checksum=export.checksum,
-                    camera=cam,
-                    up=up_vec,
-                    thread_id=ctx.thread_id,
-                    run_id=ctx.run_id,
                 )
 
                 content_blocks.append(create_text_block(text=f"{view_name} render"))
@@ -231,17 +238,13 @@ def render_step(
 
 
 def build_render_command(view: str = "iso") -> SandboxCommand:
-    script = (
-        "set +e\n"
-        'out="$TEXOCAD_OUTPUT_DIR"\n'
-        'echo "=== ortho.py ==="\n'
-        "python ortho.py 2>&1\n"
-        f'echo "$?" > "$out/{ORTHO_STATUS_FILENAME}"\n'
-        'echo "=== shaded.py ==="\n'
-        "python shaded.py 2>&1\n"
-        f'echo "$?" > "$out/{SHADED_STATUS_FILENAME}"\n'
-        "exit 0\n"
+    runner_lines = "".join(
+        f'echo "=== {style}.py ==="\n'
+        f"python {style}.py 2>&1\n"
+        f'echo "$?" > "$out/{status_filename}"\n'
+        for style, status_filename in DEFAULT_RENDER_RUNNERS
     )
+    script = f'set +e\nout="$TEXOCAD_OUTPUT_DIR"\n{runner_lines}exit 0\n'
     return SandboxCommand(
         filename="ortho.py",
         contents=_runner_source("ortho").encode("utf-8"),
@@ -253,7 +256,11 @@ def build_render_command(view: str = "iso") -> SandboxCommand:
                 camera=None,
                 up=None,
             ),
-            "shaded.py": _runner_source("shaded").encode("utf-8"),
+            **{
+                f"{style}.py": _runner_source(style).encode("utf-8")
+                for style, _ in DEFAULT_RENDER_RUNNERS
+                if style != "ortho"
+            },
             SHARED_RUNNER_MODULE: _runner_source("_shared").encode("utf-8"),
         },
     )

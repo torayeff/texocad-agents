@@ -145,8 +145,7 @@ async def authorize_thread_run_create(
     if requested not in allowed:
         _forbidden("Requested model is not available on your plan")
     metadata[METADATA_MODEL] = requested
-    metadata[METADATA_OWNER] = ctx.user.identity
-    return {METADATA_OWNER: ctx.user.identity}
+    return _stamp_owner(ctx, value)
 
 
 def verify_token(token: str) -> tuple[str, dict[str, object]]:

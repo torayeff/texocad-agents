@@ -8,6 +8,7 @@ from langgraph.types import Command
 from texocad_agents.storage import (
     StoredBlob,
     blob_path_from_url,
+    blob_payload,
     create_design_revision,
     ensure_design,
     get_design_tables,
@@ -55,21 +56,6 @@ def tool_context(runtime: ToolRuntime) -> ToolContext | None:
     )
 
 
-def blob_payload(blob: StoredBlob) -> dict:
-    return {
-        "filename": blob.filename,
-        "blobName": blob.blob_name,
-        "contentType": blob.content_type,
-        "checksum": blob.checksum,
-    }
-
-
-def normalize_path(file_path: str) -> str:
-    if file_path.startswith("/"):
-        return file_path
-    return f"/{file_path}"
-
-
 def read_runtime_file(file_path: str, runtime: ToolRuntime) -> str | None:
     if not isinstance(runtime.state, dict):
         return None
@@ -77,7 +63,8 @@ def read_runtime_file(file_path: str, runtime: ToolRuntime) -> str | None:
     if not isinstance(files, dict):
         return None
 
-    for candidate in (file_path, normalize_path(file_path)):
+    normalized = file_path if file_path.startswith("/") else f"/{file_path}"
+    for candidate in (file_path, normalized):
         if candidate not in files:
             continue
         value = files[candidate]

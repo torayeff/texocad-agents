@@ -1,7 +1,7 @@
 import hashlib
 import json
 import os
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import unquote, urlparse
@@ -173,11 +173,8 @@ def save_design_revision_blobs(
 ):
     entity = dict(design_revision)
     entity.update({
-        "source_filename": source.filename,
-        "source_blob_name": source.blob_name,
-        "source_content_type": source.content_type,
-        "source_checksum": source.checksum,
-        "exports_json": json.dumps([asdict(export) for export in exports]),
+        **blob_fields(source, prefix="source_"),
+        "exports_json": json.dumps([blob_fields(export) for export in exports]),
     })
     design_revisions_table.upsert_entity(entity)
     return entity
@@ -252,10 +249,7 @@ def save_design_preview(
         "view": view,
         "camera_json": json.dumps(camera) if camera else "",
         "up_json": json.dumps(up) if up else "",
-        "filename": preview.filename,
-        "blob_name": preview.blob_name,
-        "content_type": preview.content_type,
-        "checksum": preview.checksum,
+        **blob_fields(preview),
         "source_export_checksum": source_export_checksum,
         **lineage(created_by_thread_id, created_by_run_id),
     }
@@ -312,6 +306,24 @@ def lineage(
         "created_at": datetime.now(timezone.utc).isoformat(),
         "created_by_thread_id": created_by_thread_id or "",
         "created_by_run_id": created_by_run_id or "",
+    }
+
+
+def blob_fields(blob: StoredBlob, prefix: str = "") -> dict[str, str]:
+    return {
+        f"{prefix}filename": blob.filename,
+        f"{prefix}blob_name": blob.blob_name,
+        f"{prefix}content_type": blob.content_type,
+        f"{prefix}checksum": blob.checksum,
+    }
+
+
+def blob_payload(blob: StoredBlob) -> dict[str, str]:
+    return {
+        "filename": blob.filename,
+        "blobName": blob.blob_name,
+        "contentType": blob.content_type,
+        "checksum": blob.checksum,
     }
 
 
