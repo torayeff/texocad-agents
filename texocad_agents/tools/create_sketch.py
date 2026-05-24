@@ -2,7 +2,6 @@
 
 import base64
 import io
-import json
 import os
 
 from langchain_core.messages import ToolMessage
@@ -16,9 +15,7 @@ from PIL import Image, UnidentifiedImageError
 from texocad_agents.sketch_agent.prompt import IMAGE_PROMPT_TEMPLATE
 from texocad_agents.storage import (
     RENDER_CONTENT_TYPE,
-    get_design_tables,
     get_storage_container,
-    list_design_revisions,
     revision_blob_name,
     save_design_preview,
     save_design_revision_blobs,
@@ -35,6 +32,7 @@ from texocad_agents.tools._runtime import (
 
 SKETCH_CONTENT_TYPE = "image/png"
 PROMPT_CONTENT_TYPE = "text/plain; charset=utf-8"
+IMAGE_MODEL = "gpt-image-2"
 DEFAULT_QUALITY = "low"
 DEFAULT_SIZE = "1024x1024"
 ALLOWED_QUALITIES = {"low", "medium", "high", "auto"}
@@ -54,7 +52,6 @@ def create_sketch(
     quality: str = DEFAULT_QUALITY,
     images: list[str] | None = None,
     mask: str | None = None,
-    edit_previous: bool = False,
 ) -> Command:
     """Generate or edit an image and store it as a design revision.
 
@@ -64,12 +61,21 @@ def create_sketch(
     or any accessible blob path.
 
     Args:
-        prompt: Detailed text description of the image to generate, or edit instructions when images are provided.
+        prompt: Detailed text description of the image to generate, or edit
+            instructions when images are provided.
         runtime: LangGraph tool runtime for the current tool call.
-        quality: Image quality - "low" for drafts, "medium", "high" for final output, or "auto". Defaults to "low".
-        images: List of blob paths or URLs for input images. Can include user-uploaded attachments or previous revision exports. When provided, the model edits or uses them as reference.
-        mask: Blob path or URL of a mask image (PNG with alpha channel). Transparent areas indicate where the model should edit. Applied to the first image. Only used when images is provided.
-        edit_previous: Set true when the user is editing the current sketch. If images is omitted, the latest sketch export from this thread is used as the input image.
+        quality: Image quality - "low" for drafts, "medium", "high" for
+            final output, or "auto". Defaults to "low".
+        images: List of blob paths or URLs for input images. Can include
+            user-uploaded attachments or previous revision exports. When
+            provided, the model edits or uses them as reference.
+        mask: Blob path or URL of a mask image (PNG with alpha channel).
+            Transparent areas indicate where the model should edit. Applied
+            to the first image. Only used when images is provided.
+
+    Returns:
+        LangGraph command containing either an error message or a stored sketch
+        revision artifact.
     """
     if quality not in ALLOWED_QUALITIES:
         return error_message(
@@ -82,7 +88,7 @@ def create_sketch(
             runtime,
             f"Too many input images ({len(images)}). Maximum is {MAX_INPUT_IMAGES}.",
         )
-    if mask and not (images or edit_previous):
+    if mask and not images:
         return error_message(runtime, "A mask can only be used together with images.")
 
     ctx = get_tool_context(runtime)
@@ -92,20 +98,10 @@ def create_sketch(
             "Refused: cannot create sketch artifacts without an authenticated owner and thread.",
         )
 
-    input_images = images
-    if edit_previous and not input_images:
-        latest_export = _latest_sketch_export(ctx)
-        if latest_export is None:
-            return error_message(
-                runtime,
-                "No previous sketch image found in this thread to edit. Create a sketch first or provide an image.",
-            )
-        input_images = [latest_export]
-
     image_prompt = f"{IMAGE_PROMPT_TEMPLATE}\n\nUser request:\n{prompt.strip()}"
     storage_container = get_storage_container()
     image_buffers, mask_buffer, fetch_error = _fetch_input_buffers(
-        storage_container, ctx, input_images, mask
+        storage_container, ctx, images, mask
     )
     if fetch_error:
         return error_message(runtime, fetch_error)
@@ -115,7 +111,7 @@ def create_sketch(
     try:
         if image_buffers:
             edit_kwargs: dict = {
-                "model": "gpt-image-2",
+                "model": IMAGE_MODEL,
                 "image": image_buffers if len(image_buffers) > 1 else image_buffers[0],
                 "prompt": image_prompt,
                 "quality": quality,
@@ -126,7 +122,7 @@ def create_sketch(
             result = client.images.edit(**edit_kwargs)
         else:
             result = client.images.generate(
-                model="gpt-image-2",
+                model=IMAGE_MODEL,
                 prompt=image_prompt,
                 quality=quality,
                 size=DEFAULT_SIZE,
@@ -265,46 +261,42 @@ def _store_sketch(
     )
 
 
-def _latest_sketch_export(ctx: ToolContext) -> str | None:
-    """Return the newest stored sketch PNG export for this design thread."""
-    tables = get_design_tables()
-    revisions = list_design_revisions(
-        tables.design_revisions,
-        ctx.owner_id,
-        ctx.design_id,
-    )
-    for revision in reversed(revisions):
-        try:
-            exports = json.loads(revision.get("exports_json") or "[]")
-        except json.JSONDecodeError:
-            continue
-        for export in exports:
-            if (
-                export.get("filename") == "sketch.png"
-                and export.get("content_type") == SKETCH_CONTENT_TYPE
-                and export.get("blob_name")
-            ):
-                return export["blob_name"]
-
-    return None
-
-
 def _fetch_input_buffers(
     storage_container,
     ctx: ToolContext,
     images: list[str] | None,
     mask: str | None,
 ) -> tuple[list[ImageUpload], ImageUpload | None, str | None]:
+    """Download and validate all image-edit inputs.
+
+    Args:
+        storage_container: Azure blob container client used to fetch blobs.
+        ctx: Authenticated tool context used for blob authorization.
+        images: Optional list of input image blob paths or URLs.
+        mask: Optional mask blob path or URL.
+
+    Returns:
+        Tuple of input image uploads, optional mask upload, and optional error
+        message.
+    """
+
     image_buffers: list[ImageUpload] = []
+    first_image_size: tuple[int, int] | None = None
     for image_path in images or []:
-        buffer, error = _download_validated_image(storage_container, image_path, ctx)
+        buffer, image_size, error = _download_validated_image(
+            storage_container, image_path, ctx
+        )
         if buffer is None:
             return [], None, error
+        if first_image_size is None:
+            first_image_size = image_size
         image_buffers.append(buffer)
 
     mask_buffer: ImageUpload | None = None
     if mask:
-        mask_buffer, error = _download_validated_image(storage_container, mask, ctx)
+        mask_buffer, _, error = _download_validated_mask(
+            storage_container, mask, ctx, first_image_size
+        )
         if mask_buffer is None:
             return [], None, error
 
@@ -315,27 +307,33 @@ def _download_validated_image(
     storage_container,
     image_path: str,
     ctx: ToolContext,
-) -> tuple[ImageUpload | None, str | None]:
-    blob_name = authorize_blob_access(image_path, ctx)
-    if blob_name is None:
-        return (
-            None,
-            f"Refused image {image_path!r}: not in this thread/user scope.",
-        )
+) -> tuple[ImageUpload | None, tuple[int, int] | None, str | None]:
+    """Download an authorized image and validate its model upload format.
 
-    try:
-        image_bytes = (
-            storage_container.get_blob_client(blob_name).download_blob().readall()
-        )
-    except Exception as exc:
-        return None, f"Could not download image from {image_path!r}: {exc}"
+    Args:
+        storage_container: Azure blob container client used to fetch the image.
+        image_path: Blob path or URL for the input image.
+        ctx: Authenticated tool context used for blob authorization.
+
+    Returns:
+        Tuple of model upload payload, image dimensions, and optional error
+        message.
+    """
+
+    image_bytes, error = _download_authorized_blob(
+        storage_container, image_path, ctx, kind="image"
+    )
+    if error:
+        return None, None, error
 
     try:
         with Image.open(io.BytesIO(image_bytes)) as image:
             image.verify()
             metadata = SUPPORTED_INPUT_IMAGE_FORMATS.get(image.format)
+            image_size = image.size
     except (UnidentifiedImageError, OSError, ValueError) as exc:
         return (
+            None,
             None,
             f"Refused image {image_path!r}: not a readable image ({exc}).",
         )
@@ -343,8 +341,97 @@ def _download_validated_image(
     if metadata is None:
         return (
             None,
-            f"Refused image {image_path!r}: unsupported image format; supported formats are JPEG, PNG, and WEBP.",
+            None,
+            f"Refused image {image_path!r}: unsupported image format; "
+            "supported formats are JPEG, PNG, and WEBP.",
         )
 
     filename, content_type = metadata
-    return (filename, io.BytesIO(image_bytes), content_type), None
+    return (filename, io.BytesIO(image_bytes), content_type), image_size, None
+
+
+def _download_validated_mask(
+    storage_container,
+    mask_path: str,
+    ctx: ToolContext,
+    required_size: tuple[int, int] | None,
+) -> tuple[ImageUpload | None, tuple[int, int] | None, str | None]:
+    """Download an authorized mask and validate image-edit mask constraints.
+
+    Args:
+        storage_container: Azure blob container client used to fetch the mask.
+        mask_path: Blob path or URL for the mask image.
+        ctx: Authenticated tool context used for blob authorization.
+        required_size: Required mask dimensions from the first input image, when
+            available.
+
+    Returns:
+        Tuple of model upload payload, mask dimensions, and optional error
+        message.
+    """
+
+    mask_bytes, error = _download_authorized_blob(
+        storage_container, mask_path, ctx, kind="mask"
+    )
+    if error:
+        return None, None, error
+
+    try:
+        with Image.open(io.BytesIO(mask_bytes)) as image:
+            image.verify()
+            image_format = image.format
+            image_mode = image.mode
+            mask_size = image.size
+    except (UnidentifiedImageError, OSError, ValueError) as exc:
+        return None, None, f"Refused mask {mask_path!r}: not a readable image ({exc})."
+
+    if image_format != "PNG":
+        return (
+            None,
+            None,
+            "Refused mask: mask must be a PNG image with an alpha channel.",
+        )
+    if "A" not in image_mode:
+        return None, None, "Refused mask: mask PNG must include an alpha channel."
+    if required_size is not None and mask_size != required_size:
+        return (
+            None,
+            None,
+            "Refused mask: mask dimensions must match the first input image "
+            f"({required_size[0]}x{required_size[1]}), got "
+            f"{mask_size[0]}x{mask_size[1]}.",
+        )
+
+    return ("mask.png", io.BytesIO(mask_bytes), "image/png"), mask_size, None
+
+
+def _download_authorized_blob(
+    storage_container,
+    blob_path: str,
+    ctx: ToolContext,
+    *,
+    kind: str,
+) -> tuple[bytes | None, str | None]:
+    """Download a user-scoped blob after authorization.
+
+    Args:
+        storage_container: Azure blob container client used to fetch the blob.
+        blob_path: Blob path or URL to authorize and download.
+        ctx: Authenticated tool context used for blob authorization.
+        kind: Human-readable input kind used in error messages.
+
+    Returns:
+        Tuple of downloaded bytes and optional error message.
+    """
+
+    blob_name = authorize_blob_access(blob_path, ctx)
+    if blob_name is None:
+        return None, f"Refused {kind} {blob_path!r}: not in this thread/user scope."
+
+    try:
+        return (
+            storage_container.get_blob_client(blob_name).download_blob().readall(),
+            None,
+        )
+    except Exception as exc:
+        return None, f"Could not download {kind} from {blob_path!r}: {exc}"
