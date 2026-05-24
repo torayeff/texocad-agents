@@ -208,6 +208,24 @@ async def authorize_thread_delete(
     return _owner_filter(ctx)
 
 
+@auth.on.threads.update
+async def authorize_thread_update(
+    ctx: Auth.types.AuthContext,
+    value: Auth.types.on.threads.update.value,
+) -> Auth.types.FilterType:
+    """Authorize thread updates, including run cancellation, for the owner only.
+
+    Args:
+        ctx: LangGraph authentication context.
+        value: Thread update payload.
+
+    Returns:
+        Metadata filter requiring owner equality.
+    """
+
+    return _owner_filter(ctx)
+
+
 @auth.on.threads.create_run
 async def authorize_thread_run_create(
     ctx: Auth.types.AuthContext,
