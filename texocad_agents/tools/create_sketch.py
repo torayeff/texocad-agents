@@ -230,7 +230,8 @@ def _store_sketch(
             text=(
                 "Created sketch revision.\n"
                 f"design_id: {ctx.design_id}\n"
-                f"revision_number: {revision_number}"
+                f"revision_number: {revision_number}\n"
+                f"sketch_image_blob: {export_blob.blob_name}"
             )
         ),
         create_text_block(text="sketch render"),
