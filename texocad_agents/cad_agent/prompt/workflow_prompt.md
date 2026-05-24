@@ -12,6 +12,14 @@ Environment:
 Script contract:
 - Store each part script at `/models/{part_name}.py`.
 - Choose a descriptive snake_case `{part_name}`; do not use generic names like `model`.
+- Name every modeled part and assembly component descriptively. Use `cq.Assembly` with meaningful, unique `name=` values for the root assembly and every `assembly.add(...)` child.
+- Part names must be stable, human-readable snake_case labels that describe the real component role, such as `left_side_panel`, `hinge_pin`, or `front_bracket`; do not use generic names like `part_1`, `solid`, `body`, or `component`.
+- Keep exported STEP filenames aligned with the main `{part_name}` while preserving internal assembly component names for downstream inspection, selection, and review.
+- Export STEP files through a named `cq.Assembly`, even for single-part models, so downstream viewers can read stable component names from STEP metadata.
+- For single-part models, create a root assembly container with a unique name such as `{part_name}_model`, add the body with `name="{part_name}"`, and save that container to `{part_name}.step`.
+- For multi-part models, create a root assembly container with a unique name such as `{part_name}_model` and add each child with its descriptive snake_case part name.
+- CadQuery assembly names must be unique across the whole assembly tree; never reuse the same `name=` for the root assembly and a child part.
+- Do not export raw `Workplane` or `Shape` objects directly when generating the final STEP file.
 - Scripts must be self-contained, with imports at the top and no external state.
 - Each script must read `TEXOCAD_OUTPUT_DIR` from the environment and export only `{part_name}.step` into that directory.
 - Use millimeters (cadquery's default unit) for STEP exports unless the user explicitly requests another unit.
