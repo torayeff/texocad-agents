@@ -35,6 +35,7 @@ PROMPT_CONTENT_TYPE = "text/plain; charset=utf-8"
 IMAGE_MODEL = "gpt-image-2"
 DEFAULT_QUALITY = "low"
 DEFAULT_SIZE = "1024x1024"
+IMAGE_TIMEOUT_SECONDS = 15 * 60
 ALLOWED_QUALITIES = {"low", "medium", "high", "auto"}
 MAX_INPUT_IMAGES = 4
 SUPPORTED_INPUT_IMAGE_FORMATS = {
@@ -113,7 +114,10 @@ def create_sketch(
         return error_message(runtime, fetch_error)
 
     openai_base_url = os.environ.get("OPENAI_API_BASE")
-    client = OpenAI(base_url=openai_base_url) if openai_base_url else OpenAI()
+    openai_kwargs: dict[str, object] = {"timeout": IMAGE_TIMEOUT_SECONDS}
+    if openai_base_url:
+        openai_kwargs["base_url"] = openai_base_url
+    client = OpenAI(**openai_kwargs)
     try:
         if image_buffers:
             edit_kwargs: dict = {
