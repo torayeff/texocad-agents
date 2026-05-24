@@ -50,6 +50,7 @@ def create_sketch(
     prompt: str,
     runtime: ToolRuntime,
     quality: str = DEFAULT_QUALITY,
+    filename: str = "sketch.png",
     images: list[str] | None = None,
     mask: str | None = None,
 ) -> Command:
@@ -66,6 +67,8 @@ def create_sketch(
         runtime: LangGraph tool runtime for the current tool call.
         quality: Image quality - "low" for drafts, "medium", "high" for
             final output, or "auto". Defaults to "low".
+        filename: Informative PNG filename for the stored sketch artifact.
+            Defaults to "sketch.png".
         images: List of blob paths or URLs for input images. Can include
             user-uploaded attachments or previous revision exports. When
             provided, the model edits or uses them as reference.
@@ -90,6 +93,9 @@ def create_sketch(
         )
     if mask and not images:
         return error_message(runtime, "A mask can only be used together with images.")
+    sketch_filename, filename_error = _normalize_sketch_filename(filename)
+    if filename_error:
+        return error_message(runtime, filename_error)
 
     ctx = get_tool_context(runtime)
     if ctx is None:
@@ -146,6 +152,7 @@ def create_sketch(
             runtime,
             ctx=ctx,
             prompt=image_prompt,
+            sketch_filename=sketch_filename,
             image_bytes=image_bytes,
             image_base64=image_base64,
         )
@@ -158,6 +165,7 @@ def _store_sketch(
     *,
     ctx: ToolContext,
     prompt: str,
+    sketch_filename: str,
     image_bytes: bytes,
     image_base64: str,
 ) -> Command:
@@ -167,6 +175,7 @@ def _store_sketch(
         runtime: LangGraph tool runtime for the current tool call.
         ctx: Authenticated tool context.
         prompt: Prompt text used to generate or edit the image.
+        sketch_filename: User-facing PNG filename for the stored sketch artifact.
         image_bytes: PNG image bytes returned by the image model.
         image_base64: Base64-encoded PNG image data for the response.
 
@@ -190,22 +199,22 @@ def _store_sketch(
     export_blob = upload_blob(
         storage_container,
         revision_blob_name(
-            ctx.owner_id, ctx.design_id, revision_number, "exports", "sketch.png"
+            ctx.owner_id, ctx.design_id, revision_number, "exports", sketch_filename
         ),
         image_bytes,
-        filename="sketch.png",
+        filename=sketch_filename,
         content_type=SKETCH_CONTENT_TYPE,
-        content_disposition='inline; filename="sketch.png"',
+        content_disposition=f'inline; filename="{sketch_filename}"',
     )
     render_blob = upload_blob(
         storage_container,
         revision_blob_name(
-            ctx.owner_id, ctx.design_id, revision_number, "previews", "sketch.png"
+            ctx.owner_id, ctx.design_id, revision_number, "previews", sketch_filename
         ),
         image_bytes,
-        filename="sketch.png",
+        filename=sketch_filename,
         content_type=RENDER_CONTENT_TYPE,
-        content_disposition='inline; filename="sketch.png"',
+        content_disposition=f'inline; filename="{sketch_filename}"',
     )
     save_design_preview(
         tables.design_previews,
@@ -234,7 +243,6 @@ def _store_sketch(
                 f"sketch_image_blob: {export_blob.blob_name}"
             )
         ),
-        create_text_block(text="sketch render"),
         create_image_block(base64=image_base64, mime_type="image/png"),
     ]
 
@@ -260,6 +268,21 @@ def _store_sketch(
             ]
         }
     )
+
+
+def _normalize_sketch_filename(filename: str) -> tuple[str | None, str | None]:
+    """Validate the explicit sketch artifact filename."""
+
+    normalized = filename.strip()
+    if not normalized:
+        return None, "Invalid filename: filename must not be empty."
+    if "/" in normalized or "\\" in normalized:
+        return None, "Invalid filename: filename must not include path separators."
+    if any(char in normalized for char in {'"', "\r", "\n"}):
+        return None, "Invalid filename: filename must not include quotes or newlines."
+    if not normalized.lower().endswith(".png"):
+        normalized = f"{normalized}.png"
+    return normalized, None
 
 
 def _fetch_input_buffers(
