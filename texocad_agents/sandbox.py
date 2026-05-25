@@ -48,8 +48,8 @@ class SandboxConfig:
     apt_packages: tuple[str, ...] = ("libgl1", "libxrender1")
     cpu: int = 4
     memory: int = 8
-    create_timeout: int = 300
-    exec_timeout: int = 300
+    create_timeout: int = 900
+    exec_timeout: int = 900
     snapshot_poll_interval: float = 2.0
     network_block_all: bool = True
 
