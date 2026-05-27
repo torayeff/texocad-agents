@@ -15,14 +15,20 @@ async def create_sketch_agent(config: RunnableConfig) -> CompiledStateGraph:
 
     Args:
         config: LangGraph runnable configuration. `metadata.model` may select a
-            model key from the TexoCAD model registry.
+            model key from the TexoCAD model registry, and
+            `metadata.reasoning_effort` may select an authorized reasoning
+            effort.
 
     Returns:
         Compiled deep agent graph with attachment reading and sketch creation
         tools.
     """
 
-    model = create_model(config.get("metadata", {}).get("model"))
+    metadata = config.get("metadata", {})
+    model = create_model(
+        metadata.get("model"),
+        reasoning_effort=metadata.get("reasoning_effort"),
+    )
 
     return create_deep_agent(
         model=model,
