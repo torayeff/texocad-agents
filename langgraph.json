@@ -11,6 +11,6 @@
   },
   "env": ".env",
   "auth": {
-    "path": "./texocad_agents/auth.py:auth"
+    "path": "./texocad_agents/auth/auth.py:auth"
   }
 }
