@@ -7,7 +7,7 @@ from typing import Any, NoReturn
 import jwt
 from langgraph_sdk import Auth
 
-from texocad_agents.models import DEFAULT_MODEL, MODELS
+from texocad_agents.models import ALLOWED_REASONING_EFFORTS, DEFAULT_MODEL, MODELS
 
 JWT_CLAIM_AUTHORIZED_PARTY = "azp"
 JWT_CLAIM_SESSION_ID = "sid"
@@ -39,8 +39,10 @@ ALLOWED_PLAN_SCOPES: frozenset[str] = frozenset((
 
 METADATA_KEY = "metadata"
 METADATA_ALLOWED_MODELS = "allowed_models"
+METADATA_ALLOWED_REASONING_EFFORTS = "allowed_reasoning_efforts"
 METADATA_MODEL = "model"
 METADATA_OWNER = "owner"
+METADATA_REASONING_EFFORT = "reasoning_effort"
 
 
 def _require_env(name: str) -> str:
@@ -111,7 +113,12 @@ async def authenticate(
 
     return {
         "identity": user_id,
-        METADATA_KEY: {METADATA_ALLOWED_MODELS: sorted(allowed_models(payload))},
+        METADATA_KEY: {
+            METADATA_ALLOWED_MODELS: sorted(allowed_models(payload)),
+            METADATA_ALLOWED_REASONING_EFFORTS: sorted(
+                allowed_reasoning_efforts(payload)
+            ),
+        },
     }
 
 
@@ -245,12 +252,23 @@ async def authorize_thread_run_create(
             to the authenticated user.
     """
 
-    allowed = set(ctx.user.get(METADATA_KEY, {}).get(METADATA_ALLOWED_MODELS, []))
+    user_metadata = ctx.user.get(METADATA_KEY, {})
+    allowed = set(user_metadata.get(METADATA_ALLOWED_MODELS, []))
     metadata = value.setdefault(METADATA_KEY, {})
     requested = metadata.get(METADATA_MODEL, DEFAULT_MODEL)
     if requested not in allowed:
         _forbidden("Requested model is not available on your plan")
     metadata[METADATA_MODEL] = requested
+
+    requested_reasoning = metadata.get(METADATA_REASONING_EFFORT)
+    if requested_reasoning is not None:
+        allowed_reasoning = set(
+            user_metadata.get(METADATA_ALLOWED_REASONING_EFFORTS, [])
+        )
+        if requested_reasoning not in allowed_reasoning:
+            _forbidden("Requested reasoning effort is not available on your plan")
+        metadata[METADATA_REASONING_EFFORT] = requested_reasoning
+
     return _stamp_owner(ctx, value)
 
 
@@ -315,11 +333,7 @@ def check_subscription(payload: dict[str, object]) -> None:
     if any(payload.get(claim) is True for claim in ACCESS_BYPASS_CLAIMS):
         return
 
-    pla = payload.get(ACCESS_CLAIM_PLANS)
-    if not isinstance(pla, str):
-        _forbidden("Active subscription required")
-    plans = {part.strip() for part in pla.split(",") if part.strip()}
-    if plans.isdisjoint(ALLOWED_PLAN_SCOPES):
+    if not has_allowed_plan(payload):
         _forbidden("Active subscription required")
 
 
@@ -336,6 +350,31 @@ def allowed_models(payload: dict[str, object]) -> set[str]:
     if payload.get(ACCESS_CLAIM_VIP) is True:
         return set(MODELS.keys())
     return {DEFAULT_MODEL}
+
+
+def allowed_reasoning_efforts(payload: dict[str, object]) -> set[str]:
+    """Return reasoning efforts available to a validated token payload.
+
+    Args:
+        payload: Decoded Clerk JWT payload.
+
+    Returns:
+        Set of reasoning efforts the user may request.
+    """
+
+    if payload.get(ACCESS_CLAIM_VIP) is True or has_allowed_plan(payload):
+        return set(ALLOWED_REASONING_EFFORTS)
+    return {"low"}
+
+
+def has_allowed_plan(payload: dict[str, object]) -> bool:
+    """Return whether the token payload includes an allowed subscription plan."""
+
+    pla = payload.get(ACCESS_CLAIM_PLANS)
+    if not isinstance(pla, str):
+        return False
+    plans = {part.strip() for part in pla.split(",") if part.strip()}
+    return not plans.isdisjoint(ALLOWED_PLAN_SCOPES)
 
 
 def _owner_filter(ctx: Auth.types.AuthContext) -> Auth.types.FilterType:
