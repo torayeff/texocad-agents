@@ -10,13 +10,6 @@ GRAPH_ID_LUMI = "lumi"
 GRAPH_ID_SKETCH = "sketch"
 
 METADATA_GRAPH_ID = "graph_id"
-GRAPH_METADATA_KEYS: tuple[str, ...] = (
-    METADATA_GRAPH_ID,
-    "graph",
-    "agent",
-    "agent_id",
-    "assistant_id",
-)
 FREE_REASONING_EFFORTS: frozenset[str] = frozenset(("none", "low"))
 
 
@@ -61,18 +54,8 @@ AGENT_POLICIES: dict[str, AgentPolicy] = {
 }
 
 
-def resolve_graph_id(value: dict[str, Any], metadata: dict[str, Any]) -> str | None:
-    """Resolve the requested graph ID from a LangGraph run payload.
-
-    LangGraph clients commonly pass the graph name as `assistant_id`. If callers
-    use a custom assistant UUID, they should include `metadata.graph_id` so the
-    auth hook can select the correct policy.
-    """
-
-    for key in GRAPH_METADATA_KEYS:
-        candidate = metadata.get(key)
-        if isinstance(candidate, str) and candidate in AGENT_POLICIES:
-            return candidate
+def resolve_graph_id(value: dict[str, Any]) -> str | None:
+    """Resolve the requested graph ID from the LangGraph run payload."""
 
     assistant_id = value.get("assistant_id")
     if isinstance(assistant_id, str) and assistant_id in AGENT_POLICIES:

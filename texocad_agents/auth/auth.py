@@ -190,11 +190,11 @@ async def authorize_thread_run_create(
     if requested_reasoning is not None and not isinstance(requested_reasoning, str):
         _forbidden("Requested reasoning effort must be a string")
 
-    graph_id = resolve_graph_id(value, metadata)
+    graph_id = resolve_graph_id(value)
     if graph_id is None:
         _forbidden(
             "Unsupported or missing agent policy. Pass a graph ID such as "
-            "'lumi', 'cad', or 'sketch' as the assistant_id or metadata.graph_id."
+            "'lumi', 'cad', or 'sketch' as the assistant_id."
         )
 
     try:
