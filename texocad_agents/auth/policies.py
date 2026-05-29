@@ -2,6 +2,9 @@
 
 from dataclasses import dataclass
 from typing import Any
+from uuid import UUID, uuid5
+
+from langgraph_api.graph import NAMESPACE_GRAPH
 
 from texocad_agents.models import ALLOWED_REASONING_EFFORTS, DEFAULT_MODEL, MODELS
 
@@ -54,14 +57,25 @@ AGENT_POLICIES: dict[str, AgentPolicy] = {
 }
 
 
+# LangGraph rewrites a graph name into a deterministic assistant UUID
+# (uuid5(NAMESPACE_GRAPH, graph_id)) before the auth handler runs, so the
+# run payload arrives keyed by that UUID rather than the graph name.
+GRAPH_ID_BY_ASSISTANT_UUID: dict[str, str] = {
+    str(uuid5(NAMESPACE_GRAPH, graph_id)): graph_id for graph_id in AGENT_POLICIES
+}
+
+
 def resolve_graph_id(value: dict[str, Any]) -> str | None:
     """Resolve the requested graph ID from the LangGraph run payload."""
 
     assistant_id = value.get("assistant_id")
-    if isinstance(assistant_id, str) and assistant_id in AGENT_POLICIES:
+    if isinstance(assistant_id, UUID):
+        assistant_id = str(assistant_id)
+    if not isinstance(assistant_id, str):
+        return None
+    if assistant_id in AGENT_POLICIES:
         return assistant_id
-
-    return None
+    return GRAPH_ID_BY_ASSISTANT_UUID.get(assistant_id)
 
 
 def authorize_agent_run(
