@@ -12,7 +12,6 @@ from langgraph.types import Command
 from openai import OpenAI
 from PIL import Image, UnidentifiedImageError
 
-from texocad_agents.sketch_agent.prompt import IMAGE_PROMPT_TEMPLATE
 from texocad_agents.storage import (
     RENDER_CONTENT_TYPE,
     get_storage_container,
@@ -105,7 +104,7 @@ def create_sketch(
             "Refused: cannot create sketch artifacts without an authenticated owner and thread.",
         )
 
-    image_prompt = f"{IMAGE_PROMPT_TEMPLATE}\n\nUser request:\n{prompt.strip()}"
+    image_prompt = prompt.strip()
     storage_container = get_storage_container()
     image_buffers, mask_buffer, fetch_error = _fetch_input_buffers(
         storage_container, ctx, images, mask
