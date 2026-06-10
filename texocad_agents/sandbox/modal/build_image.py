@@ -12,6 +12,10 @@ except ImportError:
 app = modal.App("image-to-3d-trellis2")
 gpu = "H100"
 
+# Build CUDA extensions for both stages' GPUs (L4 sm_89, H100 sm_90);
+# without sm_89 they fail on L4 with "no kernel image is available".
+cuda_arch_list = "TORCH_CUDA_ARCH_LIST='8.9;9.0'"
+
 hf_secret = modal.Secret.from_dict(
     {"HF_TOKEN": os.environ["HF_TOKEN"]} if os.environ.get("HF_TOKEN") else {}
 )
@@ -79,23 +83,23 @@ image = (
     .run_commands(
         "mkdir -p /tmp/extensions && "
         "git clone -b v0.4.0 https://github.com/NVlabs/nvdiffrast.git /tmp/extensions/nvdiffrast && "
-        "pip install /tmp/extensions/nvdiffrast --no-build-isolation",
+        f"{cuda_arch_list} pip install /tmp/extensions/nvdiffrast --no-build-isolation",
         gpu=gpu,
     )
     .run_commands(
         "mkdir -p /tmp/extensions && "
         "git clone https://github.com/JeffreyXiang/CuMesh.git /tmp/extensions/CuMesh --recursive && "
-        "pip install /tmp/extensions/CuMesh --no-build-isolation",
+        f"{cuda_arch_list} pip install /tmp/extensions/CuMesh --no-build-isolation",
         gpu=gpu,
     )
     .run_commands(
         "mkdir -p /tmp/extensions && "
         "git clone https://github.com/JeffreyXiang/FlexGEMM.git /tmp/extensions/FlexGEMM --recursive && "
-        "pip install /tmp/extensions/FlexGEMM --no-build-isolation",
+        f"{cuda_arch_list} pip install /tmp/extensions/FlexGEMM --no-build-isolation",
         gpu=gpu,
     )
     .run_commands(
-        "pip install /opt/TRELLIS.2/o-voxel --no-build-isolation --no-deps",
+        f"{cuda_arch_list} pip install /opt/TRELLIS.2/o-voxel --no-build-isolation --no-deps",
         gpu=gpu,
     )
     .run_commands(

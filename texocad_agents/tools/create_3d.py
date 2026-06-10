@@ -1,6 +1,7 @@
 import base64
 import io
 from pathlib import Path
+from typing import Literal
 
 from langchain_core.messages import ToolMessage
 from langchain_core.messages.content import create_image_block, create_text_block
@@ -37,17 +38,18 @@ INPUT_IMAGE_FORMATS: dict[str, tuple[str, str]] = {
 
 
 @tool(parse_docstring=True)
-def generate_3d(
+def create_3d(
     image: str,
     runtime: ToolRuntime,
     filename: str = "model.glb",
+    quality: Literal["draft", "high"] = "draft",
 ) -> Command:
-    """Generate a 3D model (GLB) from an image and store it as a design revision.
+    """Create a 3D model (GLB) from an image and store it as a design revision.
 
     Use this only after the user has approved a preview image and explicitly
-    asked for a first 3D draft. Generation runs on a GPU and can take several
-    minutes. Pass the blob path or URL of the approved preview image, or a
-    user-uploaded image attachment.
+    asked for a 3D model. Generation runs on a GPU; "draft" quality is fast,
+    "high" quality takes noticeably longer. Pass the blob path or URL of the
+    approved preview image, or a user-uploaded image attachment.
 
     Args:
         image: Blob path or URL of the source image to convert. Use the active
@@ -55,6 +57,11 @@ def generate_3d(
         runtime: LangGraph tool runtime for the current tool call.
         filename: Informative GLB filename for the stored 3D artifact. Defaults
             to "model.glb".
+        quality: Generation quality. "draft" (default) is fast and right for a
+            first version; "high" regenerates at higher resolution with denser
+            geometry and textures, and is much slower. Use "high" only after
+            the user has approved the draft model and asked for the final
+            version.
 
     Returns:
         LangGraph command containing either an error message or a stored 3D
@@ -88,7 +95,7 @@ def generate_3d(
     source_filename = f"{Path(glb_filename).stem}{source_ext}"
 
     try:
-        glb_bytes = generate_glb(image_bytes, source_filename)
+        glb_bytes = generate_glb(image_bytes, source_filename, quality=quality)
     except Exception as exc:
         return error_message(runtime, f"3D generation failed: {exc}")
 
@@ -111,6 +118,7 @@ def generate_3d(
             source_content_type=source_content_type,
             glb_filename=glb_filename,
             glb_bytes=glb_bytes,
+            quality=quality,
         )
     except Exception as exc:
         return error_message(runtime, f"Failed to persist 3D model revision: {exc}")
@@ -126,6 +134,7 @@ def _store_model(
     source_content_type: str,
     glb_filename: str,
     glb_bytes: bytes,
+    quality: str,
 ) -> Command:
     """Persist the source image and generated GLB and build the tool response.
 
@@ -138,6 +147,7 @@ def _store_model(
         source_content_type: MIME type of the source image.
         glb_filename: User-facing GLB filename for the stored 3D artifact.
         glb_bytes: Generated GLB file contents.
+        quality: Quality preset used for generation.
 
     Returns:
         LangGraph command with a tool message and 3D model artifact metadata.
@@ -202,7 +212,8 @@ def _store_model(
                 f"design_id: {ctx.design_id}\n"
                 f"revision_number: {revision_number}\n"
                 f"model_glb_blob: {export_blob.blob_name}\n"
-                f"size_bytes: {len(glb_bytes)}"
+                f"size_bytes: {len(glb_bytes)}\n"
+                f"quality: {quality}"
             )
         ),
         create_image_block(

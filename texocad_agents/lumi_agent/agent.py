@@ -4,8 +4,8 @@ from langgraph.graph.state import CompiledStateGraph
 
 from texocad_agents.lumi_agent.prompt import SYSTEM_PROMPT
 from texocad_agents.models import create_model
+from texocad_agents.tools.create_3d import create_3d
 from texocad_agents.tools.create_sketch import create_sketch
-from texocad_agents.tools.generate_3d import generate_3d
 from texocad_agents.tools.read_attachment import read_attachment
 
 LUMI_DEFAULT_REASONING_EFFORT = "low"
@@ -34,7 +34,7 @@ async def create_lumi_agent(config: RunnableConfig) -> CompiledStateGraph:
 
     return create_deep_agent(
         model=model,
-        tools=[read_attachment, create_sketch, generate_3d],
+        tools=[read_attachment, create_sketch, create_3d],
         system_prompt=SYSTEM_PROMPT,
         name="Lumi",
     )
