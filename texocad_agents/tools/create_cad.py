@@ -9,7 +9,7 @@ from langchain_core.tools import tool
 from langgraph.prebuilt.tool_node import ToolRuntime
 from langgraph.types import Command
 
-from texocad_agents.sandbox import run_python
+from texocad_agents.sandbox.daytona.daytona import run_python
 from texocad_agents.storage import (
     MAX_MODEL_BYTES,
     STEP_CONTENT_TYPE,

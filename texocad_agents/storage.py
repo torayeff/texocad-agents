@@ -17,6 +17,7 @@ DESIGN_REVISIONS_TABLE_NAME = "texocaddesignrevisions"
 DESIGN_PREVIEWS_TABLE_NAME = "texocaddesignpreviews"
 
 STEP_CONTENT_TYPE = "application/step"
+GLB_CONTENT_TYPE = "model/gltf-binary"
 RENDER_CONTENT_TYPE = "image/png"
 MAX_MODEL_BYTES = 250 * 1024 * 1024
 REVISION_CONTENTION_RETRIES = 5

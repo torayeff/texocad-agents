@@ -4,7 +4,7 @@ import base64
 import json
 from pathlib import Path
 
-from texocad_agents.sandbox import SandboxCommand, run_python
+from texocad_agents.sandbox.daytona.daytona import SandboxCommand, run_python
 from texocad_agents.storage import (
     RENDER_CONTENT_TYPE,
     escape_key,

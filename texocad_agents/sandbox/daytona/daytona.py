@@ -1,5 +1,3 @@
-"""Run generated Python CAD code inside ephemeral Daytona sandboxes."""
-
 import logging
 import posixpath
 import time

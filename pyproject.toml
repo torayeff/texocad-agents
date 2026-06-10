@@ -16,6 +16,7 @@ dependencies = [
     "langchain-openai",
     "langgraph",
     "langgraph-sdk",
+    "modal",
     "openai",
     "pillow",
     "pymupdf",
@@ -33,5 +34,4 @@ include = ["texocad_agents*"]
 
 [tool.setuptools.package-data]
 "texocad_agents.cad_agent" = ["prompt/*.md"]
-"texocad_agents.lumi_agent" = ["prompt/*.md", "prompt/ring/*.md"]
 "texocad_agents.sketch_agent" = ["prompt/*.md"]
