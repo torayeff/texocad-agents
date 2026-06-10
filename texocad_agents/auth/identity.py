@@ -1,8 +1,7 @@
-"""Identity verification for Clerk and anonymous LangGraph callers."""
+"""Identity verification for Clerk LangGraph callers."""
 
 import asyncio
 import os
-from http.cookies import SimpleCookie
 from typing import NoReturn
 
 import jwt
@@ -28,22 +27,6 @@ REQUIRED_CLAIMS: tuple[str, ...] = (
     JWT_CLAIM_TOKEN_VERSION,
 )
 JWT_LEEWAY_SECONDS = 5
-ANONYMOUS_SESSION_COOKIE = "texocad_anonymous_session"
-ANONYMOUS_SESSION_HEADER = "x-texocad-anonymous-session"
-ANONYMOUS_SESSION_ISSUER = os.getenv(
-    "ANONYMOUS_SESSION_ISSUER",
-    "texocad-agents",
-)
-ANONYMOUS_SESSION_TYPE = "anonymous_session"
-ANONYMOUS_ID_PREFIX = "anon:"
-ANONYMOUS_REQUIRED_CLAIMS: tuple[str, ...] = (
-    "exp",
-    "iat",
-    "iss",
-    "nbf",
-    JWT_CLAIM_SUBJECT,
-    "typ",
-)
 
 ACCESS_CLAIM_FREE = "freeAccess"
 ACCESS_CLAIM_PLANS = "pla"
@@ -60,7 +43,6 @@ METADATA_ALLOWED_MODELS = "allowed_models"
 METADATA_ALLOWED_REASONING_EFFORTS = "allowed_reasoning_efforts"
 METADATA_HAS_ACCESS_BYPASS = "has_access_bypass"
 METADATA_HAS_ALLOWED_PLAN = "has_allowed_plan"
-METADATA_IS_ANONYMOUS = "is_anonymous"
 METADATA_IS_VIP = "is_vip"
 METADATA_MODEL = "model"
 METADATA_OWNER = "owner"
@@ -86,48 +68,26 @@ if not _allowed_azp:
 
 async def authenticate_identity(
     authorization: str | None,
-    headers: dict[bytes, bytes] | None,
 ) -> Auth.types.MinimalUserDict:
-    """Validate a Clerk or anonymous token and return LangGraph user metadata."""
+    """Validate a Clerk bearer token and return LangGraph user metadata."""
 
     token = _bearer_token(authorization)
-    if token:
-        try:
-            user_id, payload = await asyncio.to_thread(verify_token, token)
-        except jwt.ExpiredSignatureError:
-            _unauthorized("Token expired")
-        except jwt.PyJWTError as exc:
-            raise Auth.exceptions.HTTPException(
-                status_code=401,
-                detail="Invalid token",
-                headers={"WWW-Authenticate": "Bearer"},
-            ) from exc
-
-        return {
-            "identity": user_id,
-            METADATA_KEY: _clerk_metadata(payload),
-        }
-
-    anonymous_token = _anonymous_session_token(headers)
-    if not anonymous_token:
-        _unauthorized("Missing Authorization or anonymous session token")
+    if not token:
+        _unauthorized("Missing Authorization header")
     try:
-        anonymous_id = await asyncio.to_thread(
-            verify_anonymous_token,
-            anonymous_token,
-        )
+        user_id, payload = await asyncio.to_thread(verify_token, token)
     except jwt.ExpiredSignatureError:
-        _unauthorized("Anonymous session expired")
+        _unauthorized("Token expired")
     except jwt.PyJWTError as exc:
         raise Auth.exceptions.HTTPException(
             status_code=401,
-            detail="Invalid anonymous session token",
+            detail="Invalid token",
             headers={"WWW-Authenticate": "Bearer"},
         ) from exc
 
     return {
-        "identity": anonymous_id,
-        METADATA_KEY: _anonymous_metadata(),
+        "identity": user_id,
+        METADATA_KEY: _clerk_metadata(payload),
     }
 
 
@@ -162,32 +122,6 @@ def verify_token(token: str) -> tuple[str, dict[str, object]]:
         _unauthorized("Pending sessions are not allowed")
 
     return payload[JWT_CLAIM_SUBJECT], payload
-
-
-def verify_anonymous_token(token: str) -> str:
-    """Verify a signed anonymous-session token and return its owner identity."""
-
-    payload = jwt.decode(
-        token,
-        _require_env("ANONYMOUS_SESSION_SECRET"),
-        algorithms=["HS256"],
-        issuer=ANONYMOUS_SESSION_ISSUER,
-        leeway=JWT_LEEWAY_SECONDS,
-        options={
-            "require": list(ANONYMOUS_REQUIRED_CLAIMS),
-            "verify_aud": False,
-        },
-    )
-
-    if payload.get("typ") != ANONYMOUS_SESSION_TYPE:
-        _unauthorized("Invalid anonymous session token type")
-
-    subject = payload.get(JWT_CLAIM_SUBJECT)
-    if not isinstance(subject, str) or not subject:
-        _unauthorized("Anonymous token missing subject claim")
-    if subject.startswith(ANONYMOUS_ID_PREFIX):
-        return subject
-    return f"{ANONYMOUS_ID_PREFIX}{subject}"
 
 
 def allowed_models(payload: dict[str, object]) -> set[str]:
@@ -227,19 +161,7 @@ def _clerk_metadata(payload: dict[str, object]) -> dict[str, object]:
         METADATA_ALLOWED_REASONING_EFFORTS: sorted(allowed_reasoning_efforts(payload)),
         METADATA_HAS_ACCESS_BYPASS: has_access_bypass,
         METADATA_HAS_ALLOWED_PLAN: has_plan,
-        METADATA_IS_ANONYMOUS: False,
         METADATA_IS_VIP: is_vip,
-    }
-
-
-def _anonymous_metadata() -> dict[str, object]:
-    return {
-        METADATA_ALLOWED_MODELS: [DEFAULT_MODEL],
-        METADATA_ALLOWED_REASONING_EFFORTS: sorted(FREE_REASONING_EFFORTS),
-        METADATA_HAS_ACCESS_BYPASS: False,
-        METADATA_HAS_ALLOWED_PLAN: False,
-        METADATA_IS_ANONYMOUS: True,
-        METADATA_IS_VIP: False,
     }
 
 
@@ -252,44 +174,6 @@ def _bearer_token(authorization: str | None) -> str | None:
             _unauthorized("Missing or invalid Authorization header")
         return token
     return None
-
-
-def _anonymous_session_token(headers: dict[bytes, bytes] | None) -> str | None:
-    token = _header_value(headers, ANONYMOUS_SESSION_HEADER)
-    if token:
-        return token
-
-    cookie_header = _header_value(headers, "cookie")
-    if not cookie_header:
-        return None
-    cookies = SimpleCookie()
-    try:
-        cookies.load(cookie_header)
-    except Exception:
-        return None
-    morsel = cookies.get(ANONYMOUS_SESSION_COOKIE)
-    if morsel is None:
-        return None
-    return morsel.value or None
-
-
-def _header_value(headers: dict[bytes, bytes] | None, name: str) -> str | None:
-    if not headers:
-        return None
-    target = name.lower()
-    for raw_key, raw_value in headers.items():
-        key = _header_part(raw_key).lower()
-        if key != target:
-            continue
-        value = _header_part(raw_value).strip()
-        return value or None
-    return None
-
-
-def _header_part(value: bytes | str) -> str:
-    if isinstance(value, bytes):
-        return value.decode("latin-1")
-    return str(value)
 
 
 def _unauthorized(detail: str) -> NoReturn:

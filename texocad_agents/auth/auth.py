@@ -7,7 +7,6 @@ from langgraph_sdk import Auth
 from texocad_agents.auth.identity import (
     METADATA_HAS_ACCESS_BYPASS,
     METADATA_HAS_ALLOWED_PLAN,
-    METADATA_IS_ANONYMOUS,
     METADATA_IS_VIP,
     METADATA_KEY,
     METADATA_MODEL,
@@ -29,25 +28,22 @@ auth = Auth()
 @auth.authenticate
 async def authenticate(
     authorization: str | None = None,
-    headers: dict[bytes, bytes] | None = None,
 ) -> Auth.types.MinimalUserDict:
-    """Validate a Clerk or anonymous token and return LangGraph user metadata.
+    """Validate a Clerk bearer token and return LangGraph user metadata.
 
     Args:
         authorization: Raw `Authorization` header value.
-        headers: Raw request headers. Used to read the anonymous session cookie
-            or header when a Clerk bearer token is not present.
 
     Returns:
         Minimal LangGraph user dictionary containing the owner identity and
         policy metadata.
 
     Raises:
-        Auth.exceptions.HTTPException: If no supported token is present or token
+        Auth.exceptions.HTTPException: If the bearer token is missing or token
             validation fails.
     """
 
-    return await authenticate_identity(authorization, headers)
+    return await authenticate_identity(authorization)
 
 
 @auth.on
@@ -200,7 +196,6 @@ async def authorize_thread_run_create(
     try:
         authorization = authorize_agent_run(
             graph_id=graph_id,
-            is_anonymous=bool(user_metadata.get(METADATA_IS_ANONYMOUS)),
             has_paid_plan=bool(user_metadata.get(METADATA_HAS_ALLOWED_PLAN)),
             has_access_bypass=bool(user_metadata.get(METADATA_HAS_ACCESS_BYPASS)),
             is_vip=bool(user_metadata.get(METADATA_IS_VIP)),
