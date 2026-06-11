@@ -6,6 +6,7 @@
   ],
   "graphs": {
     "cad": "./texocad_agents/cad_agent/agent.py:create_cad_agent",
+    "clari": "./texocad_agents/clari_agent/agent.py:create_clari_agent",
     "forma": "./texocad_agents/forma_agent/agent.py:create_forma_agent",
     "lumi": "./texocad_agents/lumi_agent/agent.py:create_lumi_agent",
     "sketch": "./texocad_agents/sketch_agent/agent.py:create_sketch_agent"

@@ -190,7 +190,7 @@ async def authorize_thread_run_create(
     if graph_id is None:
         _forbidden(
             "Unsupported or missing agent policy. Pass a graph ID such as "
-            "'lumi', 'forma', 'cad', or 'sketch' as the assistant_id."
+            "'lumi', 'forma', 'cad', 'sketch', or 'clari' as the assistant_id."
         )
 
     try:
