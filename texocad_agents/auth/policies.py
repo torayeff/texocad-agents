@@ -9,6 +9,7 @@ from langgraph_api.graph import NAMESPACE_GRAPH
 from texocad_agents.models import ALLOWED_REASONING_EFFORTS, DEFAULT_MODEL, MODELS
 
 GRAPH_ID_CAD = "cad"
+GRAPH_ID_FORMA = "forma"
 GRAPH_ID_LUMI = "lumi"
 GRAPH_ID_SKETCH = "sketch"
 
@@ -40,6 +41,10 @@ class AgentRunAuthorization:
 AGENT_POLICIES: dict[str, AgentPolicy] = {
     GRAPH_ID_CAD: AgentPolicy(
         graph_id=GRAPH_ID_CAD,
+        requires_paid_access=True,
+    ),
+    GRAPH_ID_FORMA: AgentPolicy(
+        graph_id=GRAPH_ID_FORMA,
         requires_paid_access=True,
     ),
     GRAPH_ID_LUMI: AgentPolicy(
