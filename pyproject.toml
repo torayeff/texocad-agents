@@ -34,4 +34,6 @@ include = ["texocad_agents*"]
 
 [tool.setuptools.package-data]
 "texocad_agents.cad_agent" = ["prompt/*.md"]
+"texocad_agents.forma_agent" = ["prompt/*.md"]
+"texocad_agents.lumi_agent" = ["prompt/*.md"]
 "texocad_agents.sketch_agent" = ["prompt/*.md"]
