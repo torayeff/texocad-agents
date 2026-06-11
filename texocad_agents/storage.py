@@ -3,14 +3,20 @@
 import hashlib
 import json
 import os
+import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 from azure.core.exceptions import ResourceExistsError, ResourceNotFoundError
 from azure.data.tables import TableServiceClient
-from azure.storage.blob import BlobServiceClient, ContentSettings
+from azure.storage.blob import (
+    BlobSasPermissions,
+    BlobServiceClient,
+    ContentSettings,
+    generate_blob_sas,
+)
 
 DESIGNS_TABLE_NAME = "texocaddesigns"
 DESIGN_REVISIONS_TABLE_NAME = "texocaddesignrevisions"
@@ -342,6 +348,116 @@ def upload_blob(
         content_type=content_type,
         checksum=checksum,
     )
+
+
+def staging_blob_name(owner_id: str, design_id: str, filename: str) -> str:
+    """Build a unique staging blob path for an artifact produced remotely.
+
+    Staged blobs are uploaded by trusted remote workers (such as Modal
+    containers) before a revision exists, then promoted to their final
+    revision path with `promote_staged_blob`.
+
+    Args:
+        owner_id: Authenticated owner identity.
+        design_id: Stable design identifier.
+        filename: Artifact filename.
+
+    Returns:
+        Container-relative blob path under the owner's staging area.
+    """
+
+    return (
+        f"users/{scope_hash(owner_id)}/designs/{escape_key(design_id)}"
+        f"/staging/{uuid.uuid4().hex[:12]}/{escape_key(filename)}"
+    )
+
+
+def generate_blob_upload_url(
+    storage_container,
+    blob_name: str,
+    *,
+    ttl: timedelta = timedelta(hours=2),
+) -> str:
+    """Build a SAS URL granting read, create, and write on a single blob.
+
+    Read permission is included so the URL can also serve as the source of a
+    server-side copy when the staged blob is promoted.
+
+    Args:
+        storage_container: Azure Blob container client.
+        blob_name: Container-relative blob path the SAS is scoped to.
+        ttl: How long the SAS stays valid.
+
+    Returns:
+        Full blob URL with the SAS query string appended.
+    """
+
+    blob_client = storage_container.get_blob_client(blob_name)
+    now = datetime.now(timezone.utc)
+    sas = generate_blob_sas(
+        account_name=blob_client.account_name,
+        container_name=storage_container.container_name,
+        blob_name=blob_name,
+        account_key=storage_container.credential.account_key,
+        permission=BlobSasPermissions(read=True, create=True, write=True),
+        start=now - timedelta(minutes=15),
+        expiry=now + ttl,
+    )
+    return f"{blob_client.url}?{sas}"
+
+
+def promote_staged_blob(
+    storage_container,
+    *,
+    staging_sas_url: str,
+    staging_name: str,
+    blob_name: str,
+    filename: str,
+    content_type: str,
+    checksum: str,
+) -> StoredBlob:
+    """Server-side copy a staged blob to its final path and drop the stage.
+
+    Uses Put Blob From URL, so the data never leaves Azure. Content settings
+    set on the staged blob are carried over to the destination.
+
+    Args:
+        storage_container: Azure Blob container client.
+        staging_sas_url: SAS URL of the staged blob with read permission.
+        staging_name: Container-relative path of the staged blob.
+        blob_name: Final container-relative destination blob path.
+        filename: User-facing filename for the stored blob.
+        content_type: MIME type assigned to the blob.
+        checksum: SHA-256 checksum reported by the uploader.
+
+    Returns:
+        Stored blob metadata for the promoted blob.
+    """
+
+    storage_container.get_blob_client(blob_name).upload_blob_from_url(
+        staging_sas_url, overwrite=True
+    )
+    delete_blob_silently(storage_container, staging_name)
+    return StoredBlob(
+        filename=filename,
+        blob_name=blob_name,
+        content_type=content_type,
+        checksum=checksum,
+    )
+
+
+def delete_blob_silently(storage_container, blob_name: str) -> None:
+    """Delete a blob, ignoring missing blobs and transient failures.
+
+    Args:
+        storage_container: Azure Blob container client.
+        blob_name: Container-relative blob path to delete.
+    """
+
+    try:
+        storage_container.delete_blob(blob_name)
+    except Exception:
+        pass
 
 
 def save_design_preview(

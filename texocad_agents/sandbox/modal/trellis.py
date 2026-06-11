@@ -1,9 +1,11 @@
+import hashlib
 import io
 import time
 import uuid
 from pathlib import Path
 
 import modal
+import requests
 from build_image import app, image
 
 GENERATE_GPU = "H100"
@@ -185,7 +187,18 @@ class Trellis2Postprocess:
         intermediate_path: str,
         texture_size: int = 2048,
         decimation_target: int = 1_000_000,
+        upload_url: str | None = None,
+        upload_content_type: str = "model/gltf-binary",
+        upload_content_disposition: str | None = None,
+        max_bytes: int | None = None,
     ) -> dict[str, int | str]:
+        """Convert an intermediate mesh to GLB and store it.
+
+        With `upload_url` set, the GLB is PUT directly to that pre-signed
+        blob URL from the container (datacenter egress) and never written to
+        the Modal volume; otherwise it is saved to the volume for the caller
+        to download.
+        """
         import o_voxel  # type: ignore[import-not-found]
         import torch  # type: ignore[import-not-found]
 
@@ -217,17 +230,115 @@ class Trellis2Postprocess:
         )
         print(f"Converted mesh to GLB in {time.monotonic() - start:.1f}s", flush=True)
 
-        volume_path = f"{Path(intermediate_path).stem}.glb"
-        output_path = Path(OUTPUT_DIR) / volume_path
-        glb.export(output_path, extension_webp=False)
+        if upload_url is None:
+            volume_path = f"{Path(intermediate_path).stem}.glb"
+            output_path = Path(OUTPUT_DIR) / volume_path
+            glb.export(output_path, extension_webp=False)
+            source_path.unlink(missing_ok=True)
+            output_volume.commit()
+            print(f"Saved GLB to Modal volume: {volume_path}", flush=True)
+
+            return {
+                "volume_path": volume_path,
+                "size_bytes": output_path.stat().st_size,
+            }
+
+        local_path = Path("/tmp") / f"{Path(intermediate_path).stem}.glb"
+        glb.export(local_path, extension_webp=False)
         source_path.unlink(missing_ok=True)
         output_volume.commit()
-        print(f"Saved GLB to Modal volume: {volume_path}", flush=True)
 
-        return {
-            "volume_path": volume_path,
-            "size_bytes": output_path.stat().st_size,
-        }
+        size_bytes = local_path.stat().st_size
+        if max_bytes is not None and size_bytes > max_bytes:
+            local_path.unlink(missing_ok=True)
+            raise ValueError(
+                f"Generated model is too large: {size_bytes} bytes; "
+                f"limit is {max_bytes} bytes."
+            )
+
+        checksum = _sha256_file(local_path)
+        start = time.monotonic()
+        _upload_file_to_blob_url(
+            local_path,
+            upload_url,
+            content_type=upload_content_type,
+            content_disposition=upload_content_disposition,
+        )
+        local_path.unlink(missing_ok=True)
+        print(
+            f"Uploaded GLB ({size_bytes} bytes) to blob storage in "
+            f"{time.monotonic() - start:.1f}s",
+            flush=True,
+        )
+
+        return {"size_bytes": size_bytes, "sha256": checksum}
+
+
+def _sha256_file(path: Path) -> str:
+    """Stream a file and return its SHA-256 hex digest.
+
+    Args:
+        path: Local file path to hash.
+
+    Returns:
+        SHA-256 hex digest for the file contents.
+    """
+
+    digest = hashlib.sha256()
+    with path.open("rb") as file:
+        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _upload_file_to_blob_url(
+    path: Path,
+    url: str,
+    *,
+    content_type: str,
+    content_disposition: str | None,
+) -> None:
+    """Upload a local file to an Azure block blob via a pre-signed SAS URL.
+
+    Retries transient failures; never logs the URL since it embeds the SAS
+    signature.
+
+    Args:
+        path: Local file to upload.
+        url: Pre-signed blob URL with create/write permissions.
+        content_type: Content type stored on the blob.
+        content_disposition: Optional Content-Disposition stored on the blob.
+
+    Raises:
+        RuntimeError: If the upload still fails after retries.
+    """
+
+    headers = {
+        "x-ms-blob-type": "BlockBlob",
+        "x-ms-blob-content-type": content_type,
+        "Content-Type": content_type,
+    }
+    if content_disposition:
+        headers["x-ms-blob-content-disposition"] = content_disposition
+
+    last_error: Exception | None = None
+    for attempt in range(3):
+        if attempt:
+            time.sleep(2**attempt)
+        try:
+            with path.open("rb") as file:
+                response = requests.put(url, data=file, headers=headers, timeout=600)
+        except requests.RequestException as exc:
+            last_error = exc
+            continue
+        if response.status_code == 201:
+            return
+        last_error = RuntimeError(f"HTTP {response.status_code}: {response.text[:300]}")
+        if response.status_code < 500 and response.status_code != 408:
+            break
+    raise RuntimeError(
+        f"Failed to upload GLB to blob storage: {last_error}"
+    ) from last_error
 
 
 def _to_attr_layout(layout: dict[str, tuple[int, int]]) -> dict[str, slice]:

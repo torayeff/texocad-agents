@@ -14,10 +14,14 @@ from texocad_agents.sandbox.modal.client import generate_glb
 from texocad_agents.storage import (
     GLB_CONTENT_TYPE,
     MAX_MODEL_BYTES,
+    delete_blob_silently,
+    generate_blob_upload_url,
     get_storage_container,
+    promote_staged_blob,
     revision_blob_name,
     save_design_preview,
     save_design_revision_blobs,
+    staging_blob_name,
     upload_blob,
 )
 from texocad_agents.tools._runtime import (
@@ -94,19 +98,27 @@ def create_3d(
     source_ext, source_content_type = source_format
     source_filename = f"{Path(glb_filename).stem}{source_ext}"
 
+    staging_name = staging_blob_name(ctx.owner_id, ctx.design_id, glb_filename)
+    staging_sas_url = generate_blob_upload_url(storage_container, staging_name)
+
     try:
-        glb_bytes = generate_glb(image_bytes, source_filename, quality=quality)
+        upload = generate_glb(
+            image_bytes,
+            source_filename,
+            quality=quality,
+            upload_url=staging_sas_url,
+            content_type=GLB_CONTENT_TYPE,
+            content_disposition=f'attachment; filename="{glb_filename}"',
+            max_bytes=MAX_MODEL_BYTES,
+        )
     except Exception as exc:
         return error_message(runtime, f"3D generation failed: {exc}")
 
-    if not glb_bytes:
+    glb_size = int(upload.get("size_bytes") or 0)
+    glb_checksum = str(upload.get("sha256") or "")
+    if glb_size <= 0:
+        delete_blob_silently(storage_container, staging_name)
         return error_message(runtime, "3D generation returned no model data.")
-    if len(glb_bytes) > MAX_MODEL_BYTES:
-        return error_message(
-            runtime,
-            f"Generated model is too large: {len(glb_bytes)} bytes; "
-            f"limit is {MAX_MODEL_BYTES} bytes.",
-        )
 
     try:
         return _store_model(
@@ -117,10 +129,14 @@ def create_3d(
             source_filename=source_filename,
             source_content_type=source_content_type,
             glb_filename=glb_filename,
-            glb_bytes=glb_bytes,
+            glb_size=glb_size,
+            glb_checksum=glb_checksum,
+            staging_name=staging_name,
+            staging_sas_url=staging_sas_url,
             quality=quality,
         )
     except Exception as exc:
+        delete_blob_silently(storage_container, staging_name)
         return error_message(runtime, f"Failed to persist 3D model revision: {exc}")
 
 
@@ -133,10 +149,13 @@ def _store_model(
     source_filename: str,
     source_content_type: str,
     glb_filename: str,
-    glb_bytes: bytes,
+    glb_size: int,
+    glb_checksum: str,
+    staging_name: str,
+    staging_sas_url: str,
     quality: str,
 ) -> Command:
-    """Persist the source image and generated GLB and build the tool response.
+    """Persist the source image, promote the staged GLB, and build the response.
 
     Args:
         runtime: LangGraph tool runtime for the current tool call.
@@ -146,7 +165,10 @@ def _store_model(
         source_filename: Filename for the stored source image artifact.
         source_content_type: MIME type of the source image.
         glb_filename: User-facing GLB filename for the stored 3D artifact.
-        glb_bytes: Generated GLB file contents.
+        glb_size: Size in bytes of the staged GLB.
+        glb_checksum: SHA-256 checksum of the staged GLB.
+        staging_name: Container-relative path of the staged GLB blob.
+        staging_sas_url: SAS URL used to promote the staged GLB.
         quality: Quality preset used for generation.
 
     Returns:
@@ -167,15 +189,16 @@ def _store_model(
         content_type=source_content_type,
         content_disposition=f'inline; filename="{source_filename}"',
     )
-    export_blob = upload_blob(
+    export_blob = promote_staged_blob(
         storage_container,
-        revision_blob_name(
+        staging_sas_url=staging_sas_url,
+        staging_name=staging_name,
+        blob_name=revision_blob_name(
             ctx.owner_id, ctx.design_id, revision_number, "exports", glb_filename
         ),
-        glb_bytes,
         filename=glb_filename,
         content_type=GLB_CONTENT_TYPE,
-        content_disposition=f'attachment; filename="{glb_filename}"',
+        checksum=glb_checksum,
     )
     render_blob = upload_blob(
         storage_container,
@@ -212,7 +235,7 @@ def _store_model(
                 f"design_id: {ctx.design_id}\n"
                 f"revision_number: {revision_number}\n"
                 f"model_glb_blob: {export_blob.blob_name}\n"
-                f"size_bytes: {len(glb_bytes)}\n"
+                f"size_bytes: {glb_size}\n"
                 f"quality: {quality}"
             )
         ),
