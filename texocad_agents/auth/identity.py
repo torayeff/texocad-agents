@@ -3,6 +3,7 @@
 import asyncio
 import os
 from typing import NoReturn
+from uuid import UUID
 
 import jwt
 from langgraph_sdk import Auth
@@ -43,10 +44,14 @@ METADATA_ALLOWED_MODELS = "allowed_models"
 METADATA_ALLOWED_REASONING_EFFORTS = "allowed_reasoning_efforts"
 METADATA_HAS_ACCESS_BYPASS = "has_access_bypass"
 METADATA_HAS_ALLOWED_PLAN = "has_allowed_plan"
+METADATA_IS_ANONYMOUS = "is_anonymous"
 METADATA_IS_VIP = "is_vip"
 METADATA_MODEL = "model"
 METADATA_OWNER = "owner"
 METADATA_REASONING_EFFORT = "reasoning_effort"
+
+ANONYMOUS_AUTH_SCHEME = "anonymous"
+ANONYMOUS_IDENTITY_PREFIX = "anon:"
 
 
 def _require_env(name: str) -> str:
@@ -70,6 +75,10 @@ async def authenticate_identity(
     authorization: str | None,
 ) -> Auth.types.MinimalUserDict:
     """Validate a Clerk bearer token and return LangGraph user metadata."""
+
+    anonymous_session_id = _anonymous_session_id(authorization)
+    if anonymous_session_id is not None:
+        return _anonymous_user(anonymous_session_id)
 
     token = _bearer_token(authorization)
     if not token:
@@ -161,7 +170,34 @@ def _clerk_metadata(payload: dict[str, object]) -> dict[str, object]:
         METADATA_ALLOWED_REASONING_EFFORTS: sorted(allowed_reasoning_efforts(payload)),
         METADATA_HAS_ACCESS_BYPASS: has_access_bypass,
         METADATA_HAS_ALLOWED_PLAN: has_plan,
+        METADATA_IS_ANONYMOUS: False,
         METADATA_IS_VIP: is_vip,
+    }
+
+
+def _anonymous_session_id(authorization: str | None) -> str | None:
+    if not authorization:
+        return None
+    scheme, _, session_id = authorization.partition(" ")
+    if scheme.lower() != ANONYMOUS_AUTH_SCHEME:
+        return None
+    try:
+        return str(UUID(session_id.strip()))
+    except ValueError:
+        _unauthorized("Invalid anonymous session")
+
+
+def _anonymous_user(session_id: str) -> Auth.types.MinimalUserDict:
+    return {
+        "identity": f"{ANONYMOUS_IDENTITY_PREFIX}{session_id}",
+        METADATA_KEY: {
+            METADATA_ALLOWED_MODELS: [DEFAULT_MODEL],
+            METADATA_ALLOWED_REASONING_EFFORTS: sorted(FREE_REASONING_EFFORTS),
+            METADATA_HAS_ACCESS_BYPASS: False,
+            METADATA_HAS_ALLOWED_PLAN: False,
+            METADATA_IS_ANONYMOUS: True,
+            METADATA_IS_VIP: False,
+        },
     }
 
 

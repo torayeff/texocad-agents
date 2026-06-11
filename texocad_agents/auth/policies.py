@@ -28,6 +28,7 @@ class AgentPolicy:
 
     graph_id: str
     requires_paid_access: bool
+    allows_anonymous: bool
 
 
 @dataclass(frozen=True)
@@ -43,22 +44,27 @@ AGENT_POLICIES: dict[str, AgentPolicy] = {
     GRAPH_ID_CAD: AgentPolicy(
         graph_id=GRAPH_ID_CAD,
         requires_paid_access=True,
+        allows_anonymous=False,
     ),
     GRAPH_ID_CLARI: AgentPolicy(
         graph_id=GRAPH_ID_CLARI,
         requires_paid_access=False,
+        allows_anonymous=True,
     ),
     GRAPH_ID_FORMA: AgentPolicy(
         graph_id=GRAPH_ID_FORMA,
         requires_paid_access=True,
+        allows_anonymous=False,
     ),
     GRAPH_ID_LUMI: AgentPolicy(
         graph_id=GRAPH_ID_LUMI,
         requires_paid_access=False,
+        allows_anonymous=False,
     ),
     GRAPH_ID_SKETCH: AgentPolicy(
         graph_id=GRAPH_ID_SKETCH,
         requires_paid_access=True,
+        allows_anonymous=False,
     ),
 }
 
@@ -89,6 +95,7 @@ def authorize_agent_run(
     graph_id: str,
     has_paid_plan: bool,
     has_access_bypass: bool,
+    is_anonymous: bool,
     is_vip: bool,
     requested_model: str,
     requested_reasoning_effort: str | None,
@@ -98,6 +105,9 @@ def authorize_agent_run(
     policy = AGENT_POLICIES.get(graph_id)
     if policy is None:
         raise AgentPolicyError("Unsupported agent")
+
+    if is_anonymous and not policy.allows_anonymous:
+        raise AgentPolicyError("Sign in to use this agent")
 
     has_paid_access = has_paid_plan or has_access_bypass or is_vip
     if policy.requires_paid_access and not has_paid_access:
