@@ -44,15 +44,16 @@ def create_brief(
     runtime: ToolRuntime,
     images: list[str] | None = None,
 ) -> Command:
-    """Publish a finished markdown brief as a downloadable revision.
+    """Publish the current markdown brief as a downloadable revision.
 
-    Use this after the requirements brief in the agent filesystem is complete
-    and confirmed by the user. The tool stores the markdown together with the
-    listed attachment images and creates a new revision the user can download
-    and send to a developer, designer, or freelancer. Bundled images keep
-    their filenames, so markdown references like `![ref](photo.png)` resolve
-    next to the brief. Each LangGraph thread maps to exactly one brief; every
-    publish in the same thread creates a new revision of that brief.
+    Use this immediately after writing or updating a requirements brief in the
+    agent filesystem, including intermediate drafts. The tool stores the
+    markdown together with the listed attachment images and creates a new
+    revision the user can view, download, and send to a developer, designer, or
+    freelancer. Bundled images keep their filenames, so markdown references
+    like `![ref](photo.png)` resolve next to the brief. Each LangGraph thread
+    maps to exactly one brief; every publish in the same thread creates a new
+    revision of that brief.
 
     Without a signed-in session the brief cannot be stored; the tool then
     returns the markdown so it can be presented directly in chat.
@@ -206,7 +207,7 @@ def _unstored_brief_message(
 
     Args:
         runtime: LangGraph tool runtime for the current tool call.
-        markdown: Final brief markdown content.
+        markdown: Current brief markdown content.
         images: Image paths requested for bundling, if any.
 
     Returns:
@@ -228,7 +229,7 @@ def _unstored_brief_message(
                         "Brief not stored: this session is not signed in, so "
                         "downloadable revisions are unavailable. Do not retry. "
                         "Present the following markdown to the user as the "
-                        "final brief and mention that signing in enables "
+                        "current brief and mention that signing in enables "
                         f"downloadable revisions.\n{image_note}\n"
                         f"{markdown}"
                     ),

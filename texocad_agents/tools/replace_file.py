@@ -11,8 +11,8 @@ from langgraph.types import Command
 def replace_file(file_path: str, content: str, runtime: ToolRuntime) -> Command:
     """Replace a file in the agent filesystem.
 
-    Use this instead of edit_file when rewriting a complete CAD script or when
-    a change touches multiple dependent statements.
+    Use this instead of edit_file when rewriting a complete generated artifact
+    or when a change touches multiple dependent sections.
 
     Args:
         file_path: Path to the file, for example "/models/bracket.py".
