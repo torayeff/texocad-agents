@@ -55,7 +55,8 @@ def create_brief(
     maps to exactly one brief; every publish in the same thread creates a new
     revision of that brief.
 
-    Without a signed-in session the brief cannot be stored; the tool then
+    Brief revisions can be stored for signed-in users and for verified
+    anonymous sessions. If no authenticated owner is available, the tool then
     returns the markdown so it can be presented directly in chat.
 
     Args:

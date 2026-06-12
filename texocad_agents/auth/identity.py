@@ -1,4 +1,4 @@
-"""Identity verification for Clerk LangGraph callers."""
+"""Identity verification for Clerk and anonymous LangGraph callers."""
 
 import asyncio
 import os
@@ -11,6 +11,16 @@ from langgraph_sdk import Auth
 from texocad_agents.auth.policies import FREE_REASONING_EFFORTS
 from texocad_agents.models import ALLOWED_REASONING_EFFORTS, DEFAULT_MODEL, MODELS
 
+ANONYMOUS_JWT_ALGORITHM = "HS256"
+ANONYMOUS_REQUIRED_CLAIMS: tuple[str, ...] = (
+    "aud",
+    "exp",
+    "iat",
+    "iss",
+    "nbf",
+    "sub",
+)
+ANONYMOUS_SUBJECT_PREFIX = "anon:"
 JWT_CLAIM_AUTHORIZED_PARTY = "azp"
 JWT_CLAIM_SESSION_ID = "sid"
 JWT_CLAIM_SESSION_STATUS = "sts"
@@ -51,7 +61,6 @@ METADATA_OWNER = "owner"
 METADATA_REASONING_EFFORT = "reasoning_effort"
 
 ANONYMOUS_AUTH_SCHEME = "anonymous"
-ANONYMOUS_IDENTITY_PREFIX = "anon:"
 
 
 def _require_env(name: str) -> str:
@@ -64,6 +73,9 @@ def _require_env(name: str) -> str:
 CLERK_JWKS_URL = _require_env("CLERK_JWKS_URL")
 CLERK_ISSUER = _require_env("CLERK_ISSUER")
 ALLOWED_TOKEN_AZP = _require_env("ALLOWED_TOKEN_AZP")
+ANONYMOUS_SESSION_SECRET = _require_env("ANONYMOUS_SESSION_SECRET")
+ANONYMOUS_SESSION_ISSUER = os.getenv("ANONYMOUS_SESSION_ISSUER", "texocad-ui")
+ANONYMOUS_SESSION_AUDIENCE = os.getenv("ANONYMOUS_SESSION_AUDIENCE", "texocad-agents")
 
 _jwks = jwt.PyJWKClient(CLERK_JWKS_URL, cache_keys=True)
 _allowed_azp = {part.strip() for part in ALLOWED_TOKEN_AZP.split(",") if part.strip()}
@@ -76,9 +88,9 @@ async def authenticate_identity(
 ) -> Auth.types.MinimalUserDict:
     """Validate a Clerk bearer token and return LangGraph user metadata."""
 
-    anonymous_session_id = _anonymous_session_id(authorization)
-    if anonymous_session_id is not None:
-        return _anonymous_user(anonymous_session_id)
+    anonymous_identity = _anonymous_identity(authorization)
+    if anonymous_identity is not None:
+        return _anonymous_user(anonymous_identity)
 
     token = _bearer_token(authorization)
     if not token:
@@ -175,21 +187,51 @@ def _clerk_metadata(payload: dict[str, object]) -> dict[str, object]:
     }
 
 
-def _anonymous_session_id(authorization: str | None) -> str | None:
+def _anonymous_identity(authorization: str | None) -> str | None:
     if not authorization:
         return None
-    scheme, _, session_id = authorization.partition(" ")
+    scheme, _, token = authorization.partition(" ")
     if scheme.lower() != ANONYMOUS_AUTH_SCHEME:
         return None
+    if not token:
+        _unauthorized("Missing anonymous session")
     try:
-        return str(UUID(session_id.strip()))
+        payload = jwt.decode(
+            token.strip(),
+            ANONYMOUS_SESSION_SECRET,
+            algorithms=[ANONYMOUS_JWT_ALGORITHM],
+            audience=ANONYMOUS_SESSION_AUDIENCE,
+            issuer=ANONYMOUS_SESSION_ISSUER,
+            leeway=JWT_LEEWAY_SECONDS,
+            options={
+                "require": list(ANONYMOUS_REQUIRED_CLAIMS),
+            },
+        )
+    except jwt.ExpiredSignatureError:
+        _unauthorized("Anonymous session expired")
+    except jwt.PyJWTError as exc:
+        raise Auth.exceptions.HTTPException(
+            status_code=401,
+            detail="Invalid anonymous session",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+
+    subject = payload.get("sub")
+    if not isinstance(subject, str) or not subject.startswith(ANONYMOUS_SUBJECT_PREFIX):
+        _unauthorized("Invalid anonymous subject")
+    session_id = subject.removeprefix(ANONYMOUS_SUBJECT_PREFIX)
+    try:
+        normalized_session_id = str(UUID(session_id))
     except ValueError:
-        _unauthorized("Invalid anonymous session")
+        _unauthorized("Invalid anonymous subject")
+    if subject != f"{ANONYMOUS_SUBJECT_PREFIX}{normalized_session_id}":
+        _unauthorized("Invalid anonymous subject")
+    return subject
 
 
-def _anonymous_user(session_id: str) -> Auth.types.MinimalUserDict:
+def _anonymous_user(identity: str) -> Auth.types.MinimalUserDict:
     return {
-        "identity": f"{ANONYMOUS_IDENTITY_PREFIX}{session_id}",
+        "identity": identity,
         METADATA_KEY: {
             METADATA_ALLOWED_MODELS: [DEFAULT_MODEL],
             METADATA_ALLOWED_REASONING_EFFORTS: sorted(FREE_REASONING_EFFORTS),
