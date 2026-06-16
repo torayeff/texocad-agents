@@ -7,7 +7,6 @@ from langgraph_sdk import Auth
 from texocad_agents.auth.identity import (
     METADATA_HAS_ACCESS_BYPASS,
     METADATA_HAS_ALLOWED_PLAN,
-    METADATA_IS_ANONYMOUS,
     METADATA_IS_VIP,
     METADATA_KEY,
     METADATA_MODEL,
@@ -199,7 +198,6 @@ async def authorize_thread_run_create(
             graph_id=graph_id,
             has_paid_plan=bool(user_metadata.get(METADATA_HAS_ALLOWED_PLAN)),
             has_access_bypass=bool(user_metadata.get(METADATA_HAS_ACCESS_BYPASS)),
-            is_anonymous=bool(user_metadata.get(METADATA_IS_ANONYMOUS)),
             is_vip=bool(user_metadata.get(METADATA_IS_VIP)),
             requested_model=requested_model,
             requested_reasoning_effort=requested_reasoning,

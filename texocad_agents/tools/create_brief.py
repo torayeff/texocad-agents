@@ -55,9 +55,9 @@ def create_brief(
     maps to exactly one brief; every publish in the same thread creates a new
     revision of that brief.
 
-    Brief revisions can be stored for signed-in users and for verified
-    anonymous sessions. If no authenticated owner is available, the tool then
-    returns the markdown so it can be presented directly in chat.
+    Brief revisions are stored for signed-in users. If no authenticated owner
+    is available, the tool returns the markdown so it can be presented directly
+    in chat.
 
     Args:
         file_path: Path to the markdown brief in the agent filesystem, for
