@@ -8,8 +8,6 @@ from texocad_agents.tools.create_3d import create_3d
 from texocad_agents.tools.create_sketch import create_sketch
 from texocad_agents.tools.read_attachment import read_attachment
 
-LUMI_DEFAULT_REASONING_EFFORT = "low"
-
 
 async def create_lumi_agent(config: RunnableConfig) -> CompiledStateGraph:
     """Create a configured Lumi deep agent.
@@ -18,7 +16,7 @@ async def create_lumi_agent(config: RunnableConfig) -> CompiledStateGraph:
         config: LangGraph runnable configuration. `metadata.model` may select a
             model key from the TexoCAD model registry, and
             `metadata.reasoning_effort` may select an authorized reasoning
-            effort. Lumi defaults to low reasoning.
+            effort.
 
     Returns:
         Compiled deep agent graph with attachment reading, preview sketching,
@@ -28,8 +26,7 @@ async def create_lumi_agent(config: RunnableConfig) -> CompiledStateGraph:
     metadata = config.get("metadata", {})
     model = create_model(
         metadata.get("model"),
-        reasoning_effort=metadata.get("reasoning_effort")
-        or LUMI_DEFAULT_REASONING_EFFORT,
+        reasoning_effort=metadata.get("reasoning_effort"),
     )
 
     return create_deep_agent(

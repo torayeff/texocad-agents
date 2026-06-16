@@ -54,7 +54,7 @@ AGENT_POLICIES: dict[str, AgentPolicy] = {
     ),
     GRAPH_ID_LUMI: AgentPolicy(
         graph_id=GRAPH_ID_LUMI,
-        requires_paid_access=False,
+        requires_paid_access=True,
     ),
     GRAPH_ID_SKETCH: AgentPolicy(
         graph_id=GRAPH_ID_SKETCH,

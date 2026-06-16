@@ -10,8 +10,6 @@ from texocad_agents.tools.create_brief import create_brief
 from texocad_agents.tools.read_attachment import read_attachment
 from texocad_agents.tools.replace_file import replace_file
 
-CLARI_DEFAULT_REASONING_EFFORT = "low"
-
 
 async def create_clari_agent(config: RunnableConfig) -> CompiledStateGraph:
     """Create a configured Clari deep agent.
@@ -20,8 +18,7 @@ async def create_clari_agent(config: RunnableConfig) -> CompiledStateGraph:
         config: LangGraph runnable configuration. `metadata.model` may select a
             model key from the TexoCAD model registry, and
             `metadata.reasoning_effort` may select an authorized reasoning
-            effort. Clari defaults to low reasoning to keep the interview loop
-            responsive.
+            effort.
 
     Returns:
         Compiled deep agent graph with attachment reading, file replacement,
@@ -31,8 +28,7 @@ async def create_clari_agent(config: RunnableConfig) -> CompiledStateGraph:
     metadata = config.get("metadata", {})
     model = create_model(
         metadata.get("model"),
-        reasoning_effort=metadata.get("reasoning_effort")
-        or CLARI_DEFAULT_REASONING_EFFORT,
+        reasoning_effort=metadata.get("reasoning_effort"),
     )
 
     return create_deep_agent(

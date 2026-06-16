@@ -33,7 +33,6 @@ Publishing contract:
 - `create_brief` stores the markdown brief together with the listed attachment images and creates a brief revision the user can view, download, and share.
 - Pass the original attachment blob paths in `images`; the bundled files keep their filenames so the markdown image references resolve.
 - Call `create_brief` immediately after every successful `write_file`, `edit_file`, or `replace_file` call that creates or changes a markdown brief under `/briefs/`; do not wait for final confirmation.
-- If `create_brief` reports the brief could not be stored because the session is not signed in, do not retry; the tool returns the current markdown, and you must present that markdown in your reply so the user can copy it, noting that signing in enables downloadable revisions.
 - Do not claim the brief was stored unless `create_brief` reports success.
 - Do not invent artifact URLs. In user responses, report the revision number and a concise status only.
 
@@ -42,4 +41,3 @@ User files:
 - Pass the full blob path or URL exactly as provided.
 - `read_attachment` supports PDF, images (jpg, jpeg, png, webp), and text files. SVG and other image formats such as gif, bmp, and tiff are unsupported.
 - After reading an attachment, state what you took from it (style cues, constraints, content) so the user can correct your interpretation.
-- If `read_attachment` is refused because the session is not signed in, do not retry; ask the user to describe the file instead and capture their description in the brief.

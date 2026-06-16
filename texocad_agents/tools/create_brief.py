@@ -55,10 +55,6 @@ def create_brief(
     maps to exactly one brief; every publish in the same thread creates a new
     revision of that brief.
 
-    Brief revisions are stored for signed-in users. If no authenticated owner
-    is available, the tool returns the markdown so it can be presented directly
-    in chat.
-
     Args:
         file_path: Path to the markdown brief in the agent filesystem, for
             example "/briefs/portfolio-website.md".
@@ -99,7 +95,10 @@ def create_brief(
 
     ctx = get_tool_context(runtime)
     if ctx is None:
-        return _unstored_brief_message(runtime, markdown=markdown, images=images)
+        return error_message(
+            runtime,
+            "Refused: cannot create brief artifacts without an authenticated owner and thread.",
+        )
 
     brief_images, image_error = _collect_brief_images(ctx, images)
     if image_error:
@@ -192,49 +191,6 @@ def create_brief(
                             run_id=ctx.run_id,
                         )
                     },
-                )
-            ]
-        }
-    )
-
-
-def _unstored_brief_message(
-    runtime: ToolRuntime,
-    *,
-    markdown: str,
-    images: list[str] | None,
-) -> Command:
-    """Build the fallback response when no signed-in session exists.
-
-    Args:
-        runtime: LangGraph tool runtime for the current tool call.
-        markdown: Current brief markdown content.
-        images: Image paths requested for bundling, if any.
-
-    Returns:
-        Command with a tool message carrying the brief inline instead of a
-        stored revision.
-    """
-
-    image_note = (
-        "Images were not bundled; keep their markdown references and tell the "
-        "user to send the image files alongside the brief.\n"
-        if images
-        else ""
-    )
-    return Command(
-        update={
-            "messages": [
-                ToolMessage(
-                    content=(
-                        "Brief not stored: this session is not signed in, so "
-                        "downloadable revisions are unavailable. Do not retry. "
-                        "Present the following markdown to the user as the "
-                        "current brief and mention that signing in enables "
-                        f"downloadable revisions.\n{image_note}\n"
-                        f"{markdown}"
-                    ),
-                    tool_call_id=runtime.tool_call_id,
                 )
             ]
         }
