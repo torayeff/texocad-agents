@@ -144,7 +144,7 @@ async def authorize_thread_update(
     ctx: Auth.types.AuthContext,
     value: Auth.types.on.threads.update.value,
 ) -> Auth.types.FilterType:
-    """Authorize thread updates, including run cancellation, for the owner only.
+    """Authorize thread updates and keep owner metadata immutable.
 
     Args:
         ctx: LangGraph authentication context.
@@ -154,7 +154,7 @@ async def authorize_thread_update(
         Metadata filter requiring owner equality.
     """
 
-    return _owner_filter(ctx)
+    return _stamp_owner(ctx, value)
 
 
 @auth.on.threads.create_run
