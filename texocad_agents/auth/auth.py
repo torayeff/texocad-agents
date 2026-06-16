@@ -207,8 +207,7 @@ async def authorize_thread_run_create(
 
     metadata[METADATA_GRAPH_ID] = authorization.graph_id
     metadata[METADATA_MODEL] = authorization.model
-    if authorization.reasoning_effort is not None:
-        metadata[METADATA_REASONING_EFFORT] = authorization.reasoning_effort
+    metadata[METADATA_REASONING_EFFORT] = authorization.reasoning_effort
 
     return _stamp_owner(ctx, value)
 

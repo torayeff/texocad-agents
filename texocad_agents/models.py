@@ -9,7 +9,7 @@ from langchain.chat_models import init_chat_model
 MODEL_TIMEOUT = httpx.Timeout(connect=30.0, read=1800.0, write=30.0, pool=30.0)
 MAX_RETRIES = 3
 DEFAULT_MODEL = "gpt-5.5"
-DEFAULT_REASONING_EFFORT = "xhigh"
+DEFAULT_REASONING_EFFORT = "low"
 ALLOWED_REASONING_EFFORTS: frozenset[str] = frozenset((
     "none",
     "low",

@@ -6,7 +6,12 @@ from uuid import UUID, uuid5
 
 from langgraph_api.graph import NAMESPACE_GRAPH
 
-from texocad_agents.models import ALLOWED_REASONING_EFFORTS, DEFAULT_MODEL, MODELS
+from texocad_agents.models import (
+    ALLOWED_REASONING_EFFORTS,
+    DEFAULT_MODEL,
+    DEFAULT_REASONING_EFFORT,
+    MODELS,
+)
 
 GRAPH_ID_CAD = "cad"
 GRAPH_ID_CLARI = "clari"
@@ -112,10 +117,8 @@ def authorize_agent_run(
         if is_vip or has_paid_plan
         else set(FREE_REASONING_EFFORTS)
     )
-    if (
-        requested_reasoning_effort is not None
-        and requested_reasoning_effort not in allowed_reasoning_efforts
-    ):
+    reasoning_effort = requested_reasoning_effort or DEFAULT_REASONING_EFFORT
+    if reasoning_effort not in allowed_reasoning_efforts:
         raise AgentPolicyError(
             "Requested reasoning effort is not available for this agent"
         )
@@ -123,5 +126,5 @@ def authorize_agent_run(
     return AgentRunAuthorization(
         graph_id=graph_id,
         model=requested_model,
-        reasoning_effort=requested_reasoning_effort,
+        reasoning_effort=reasoning_effort,
     )
