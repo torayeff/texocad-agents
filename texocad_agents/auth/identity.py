@@ -48,6 +48,7 @@ METADATA_MODEL = "model"
 METADATA_OWNER = "owner"
 METADATA_REASONING_EFFORT = "reasoning_effort"
 
+
 def _require_env(name: str) -> str:
     value = os.getenv(name)
     if not value:
