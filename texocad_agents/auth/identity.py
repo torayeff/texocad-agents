@@ -135,7 +135,11 @@ def allowed_models(payload: dict[str, object]) -> set[str]:
 def allowed_reasoning_efforts(payload: dict[str, object]) -> set[str]:
     """Return reasoning efforts available to a validated token payload."""
 
-    if payload.get(ACCESS_CLAIM_VIP) is True or has_allowed_plan(payload):
+    if (
+        payload.get(ACCESS_CLAIM_FREE) is True
+        or payload.get(ACCESS_CLAIM_VIP) is True
+        or has_allowed_plan(payload)
+    ):
         return set(ALLOWED_REASONING_EFFORTS)
     return set(FREE_REASONING_EFFORTS)
 

@@ -114,7 +114,7 @@ def authorize_agent_run(
 
     allowed_reasoning_efforts = (
         set(ALLOWED_REASONING_EFFORTS)
-        if is_vip or has_paid_plan
+        if is_vip or has_paid_plan or has_access_bypass
         else set(FREE_REASONING_EFFORTS)
     )
     reasoning_effort = requested_reasoning_effort or DEFAULT_REASONING_EFFORT
