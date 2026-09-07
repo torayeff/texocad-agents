@@ -8,16 +8,18 @@ from langchain.chat_models import init_chat_model
 
 MODEL_TIMEOUT = httpx.Timeout(connect=30.0, read=1800.0, write=30.0, pool=30.0)
 MAX_RETRIES = 3
-DEFAULT_MODEL = "gpt-5.6-sol"
+DEFAULT_MODEL = "gpt-6-astra"
 DEFAULT_REASONING_EFFORT = "low"
-ALLOWED_REASONING_EFFORTS: frozenset[str] = frozenset((
-    "none",
-    "low",
-    "medium",
-    "high",
-    "xhigh",
-    "max",
-))
+ALLOWED_REASONING_EFFORTS: frozenset[str] = frozenset(
+    (
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+    )
+)
 
 
 @dataclass(frozen=True)
@@ -36,9 +38,9 @@ class ModelConfig:
 
 
 MODELS: dict[str, ModelConfig] = {
-    "gpt-5.6-sol": ModelConfig(
+    "gpt-6-astra": ModelConfig(
         provider="openai",
-        name="gpt-5.6-sol",
+        name="gpt-6-astra",
         kwargs={
             "reasoning": {"effort": DEFAULT_REASONING_EFFORT, "summary": "auto"},
             "include": ["reasoning.encrypted_content"],
